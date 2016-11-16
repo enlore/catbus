@@ -1,18 +1,8 @@
 //run mocha from project root
 
-var util = require('util');
+
 var assert = require('assert');
 var bus = require('../src/catbus.js');
-var lz = require('lz-string');
-
-
-
-var tt = JSON.stringify({meow:{update:'cow'},
-    'eis.thread':{_:'axd5'}, 'eis.vendor':{_:'bunny'},'eis.machine':{_:'855456'},'eis.site':{_:'nbca'}});
-console.log(tt);
-var cc = lz.compressToEncodedURIComponent(tt);
-console.log(cc);
-console.log(lz.decompressFromEncodedURIComponent(cc));
 
 var _invoked = 0;
 var _msg;
@@ -77,17 +67,17 @@ describe('Catbus', function(){
 
         it('makes and finds trees', function(){
 
-            var fruitTree = bus.demandTree('fruit');
-            var catsTree = bus.demandTree('cats');
+            var fruitTree = bus.demandZone('fruit');
+            var catsTree = bus.demandZone('cats');
 
-            assert.equal(fruitTree === bus.demandTree('fruit'), true);
-            assert.equal(catsTree === bus.demandTree('cats'), true);
+            assert.equal(fruitTree === bus.demandZone('fruit'), true);
+            assert.equal(catsTree === bus.demandZone('cats'), true);
 
         });
 
         it('makes child zones', function(){
 
-            var fruitTree = bus.demandTree('fruit');
+            var fruitTree = bus.demandZone('fruit');
 
             var sour = fruitTree.demandChild('sour');
             var sweet = fruitTree.demandChild('sweet');
@@ -100,7 +90,7 @@ describe('Catbus', function(){
 
         it('makes child of child zones', function(){
 
-            var fruitTree = bus.demandTree('fruit');
+            var fruitTree = bus.demandZone('fruit');
 
             var sour = fruitTree.demandChild('sour');
             var sweet = fruitTree.demandChild('sweet');
@@ -125,7 +115,7 @@ describe('Catbus', function(){
 
         it('finds data up the tree', function(){
 
-            var fruitTree = bus.demandTree('fruit');
+            var fruitTree = bus.demandZone('fruit');
             fruitTree.demandLocation('owner').write('Scott');
 
             var sour = fruitTree.demandChild('sour');
@@ -207,35 +197,7 @@ describe('Catbus', function(){
             assert.equal('Catbus', tree.read());
         });
 
-        it('can conform incoming data', function(){
 
-            tree.conform('meow');
-            tree.write('Kittenbus');
-            assert.equal('meow', tree.read());
-            tree.write('Catbus');
-            assert.equal('meow', tree.read());
-        });
-
-
-        it('can conform data dynamically with topics', function(){
-
-            tree.conform(function(msg, topic, tag){ return msg + ':' + topic + ':' + tag});
-            tree.write('Kittenbus','look','kitten');
-            assert.equal('Kittenbus:look:kitten', tree.read('look'));
-            tree.write('Catbus');
-            assert.equal('Catbus:update:tree', tree.read());
-
-        });
-
-        it('can clear conform', function(){
-
-            tree.conform();
-            tree.write('Kittenbus','look','kitten');
-            assert.equal('Kittenbus', tree.read('look'));
-            tree.write('Catbus');
-            assert.equal('Catbus', tree.read());
-
-        });
 
         it('can toggle data', function(){
             tree.write('Mei');
@@ -252,12 +214,6 @@ describe('Catbus', function(){
             tree.write('Catbus');
             tree.refresh();
             assert.equal('Catbus', tree.read());
-        });
-
-        it('can create synchronous methods to act as an api mediator', function(){
-            tree.method('climb','climb_response', function(msg){ return msg + ' up tree'});
-            var result = tree.invoke('climb','kitten');
-            assert.equal('kitten up tree', result);
         });
 
 
@@ -674,7 +630,8 @@ describe('Catbus', function(){
 
             it('batch keeps first message', function () {
 
-                girl.keep('first');
+                //girl.keep('first');
+                girl.first();
                 floodCastle();
                 bus.flush();
                 assert.equal(1, _invoked);
@@ -684,7 +641,8 @@ describe('Catbus', function(){
 
             it('batch keeps all messages', function () {
 
-                girl.keep('all');
+                //girl.keep('all');
+                girl.all();
                 floodCastle();
                 bus.flush();
                 assert.equal(1, _invoked);
@@ -694,7 +652,9 @@ describe('Catbus', function(){
 
             it('batches all and sets emit topics', function () {
 
-                girl.keep('all').emit(function(msg){ return 'count is ' + msg.length;});
+                //girl.keep('all').emit(function(msg){ return 'count is ' + msg.length;});
+                girl.all().emit(function(msg){ return 'count is ' + msg.length;});
+
                 floodCastle();
                 bus.flush();
                 assert.equal(1, _invoked);

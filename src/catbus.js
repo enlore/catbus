@@ -1,7 +1,7 @@
 /**
- * catbus.js (v2.4-proto) -- adding timing functions, not ready yet
+ * catbus.js (v3.0.0) --
  *
- * Copyright (c) 2015 Scott Southworth, Landon Barnickle, Nick Lorenson & Contributors
+ * Copyright (c) 2016 Scott Southworth, Landon Barnickle, Nick Lorenson & Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at:
@@ -20,6 +20,190 @@
 
     "use strict";
 
+    // utility methods -- based on lodash
+
+
+    function toNumber(n){
+        return typeof n === 'number' ? n : 0;
+    }
+
+    function delay(func, wait) {
+
+        var lastArgs,
+            lastThis,
+            result,
+            timerId;
+
+        if (typeof func != 'function') {
+            //throw new TypeError(); todo make error here
+        }
+
+        wait = toNumber(wait);
+
+        function invokeFunc() {
+
+            var args = lastArgs,
+                thisArg = lastThis;
+
+            lastArgs = lastThis = undefined;
+            result = func.apply(thisArg, args);
+            return result;
+
+        }
+
+        function cancel() {
+            if (timerId !== undefined) {
+                clearTimeout(timerId);
+            }
+            lastArgs = lastThis = timerId = undefined;
+        }
+
+        function flush() {
+            return timerId === undefined ? result : invokeFunc();
+        }
+
+        function delayed() {
+
+            lastArgs = arguments;
+            lastThis = this;
+
+            timerId = setTimeout(invokeFunc, wait);
+
+            return result;
+
+        }
+
+        delayed.cancel = cancel;
+        delayed.flush = flush;
+        return delayed;
+
+    }
+
+    function debounce(func, wait, options) {
+
+        var lastArgs,
+            lastThis,
+            maxWait,
+            result,
+            timerId,
+            lastCallTime,
+            lastInvokeTime = 0,
+            leading = false,
+            maxing = false,
+            trailing = true;
+
+        if (typeof func != 'function') {
+            //throw new TypeError(); todo make error here
+        }
+
+        wait = toNumber(wait);
+        if (options && typeof options === 'object') {
+            leading = !!options.leading;
+            maxing = 'maxWait' in options;
+            maxWait = maxing ? Math.max(toNumber(options.maxWait) || 0, wait) : maxWait;
+            trailing = 'trailing' in options ? !!options.trailing : trailing;
+        }
+
+        function invokeFunc(time) {
+            var args = lastArgs,
+                thisArg = lastThis;
+
+            lastArgs = lastThis = undefined;
+            lastInvokeTime = time;
+            result = func.apply(thisArg, args);
+            return result;
+        }
+
+        function leadingEdge(time) {
+            // Reset any `maxWait` timer.
+            lastInvokeTime = time;
+            // Start the timer for the trailing edge.
+            timerId = setTimeout(timerExpired, wait);
+            // Invoke the leading edge.
+            return leading ? invokeFunc(time) : result;
+        }
+
+        function remainingWait(time) {
+            var timeSinceLastCall = time - lastCallTime,
+                timeSinceLastInvoke = time - lastInvokeTime,
+                result = wait - timeSinceLastCall;
+
+            return maxing ? Math.min(result, maxWait - timeSinceLastInvoke) : result;
+        }
+
+        function shouldInvoke(time) {
+            var timeSinceLastCall = time - lastCallTime,
+                timeSinceLastInvoke = time - lastInvokeTime;
+
+            // Either this is the first call, activity has stopped and we're at the
+            // trailing edge, the system time has gone backwards and we're treating
+            // it as the trailing edge, or we've hit the `maxWait` limit.
+            return (lastCallTime === undefined || (timeSinceLastCall >= wait) ||
+            (timeSinceLastCall < 0) || (maxing && timeSinceLastInvoke >= maxWait));
+        }
+
+        function timerExpired() {
+            var time = Date.now();
+            if (shouldInvoke(time)) {
+                return trailingEdge(time);
+            }
+            // Restart the timer.
+            timerId = setTimeout(timerExpired, remainingWait(time));
+        }
+
+        function trailingEdge(time) {
+            timerId = undefined;
+
+            // Only invoke if we have `lastArgs` which means `func` has been
+            // debounced at least once.
+            if (trailing && lastArgs) {
+                return invokeFunc(time);
+            }
+            lastArgs = lastThis = undefined;
+            return result;
+        }
+
+        function cancel() {
+            if (timerId !== undefined) {
+                clearTimeout(timerId);
+            }
+            lastInvokeTime = 0;
+            lastArgs = lastCallTime = lastThis = timerId = undefined;
+        }
+
+        function flush() {
+            return timerId === undefined ? result : trailingEdge(Date.now());
+        }
+
+        function debounced() {
+            var time = now(),
+                isInvoking = shouldInvoke(time);
+
+            lastArgs = arguments;
+            lastThis = this;
+            lastCallTime = time;
+
+            if (isInvoking) {
+                if (timerId === undefined) {
+                    return leadingEdge(lastCallTime);
+                }
+                if (maxing) {
+                    // Handle invocations in a tight loop.
+                    timerId = setTimeout(timerExpired, wait);
+                    return invokeFunc(lastCallTime);
+                }
+            }
+            if (timerId === undefined) {
+                timerId = setTimeout(timerExpired, wait);
+            }
+            return result;
+        }
+        debounced.cancel = cancel;
+        debounced.flush = flush;
+        return debounced;
+    }
+
+
     var catbus = {};
     var externalContext = this;
 
@@ -31,10 +215,6 @@
     else
         externalContext.Catbus = catbus;
 
-
-    function createQueueFrame() {
-        return  {defer:[], batch:[], batchAndDefer:[]};
-    }
 
     function createFunctor(val) {
         if(val === undefined) return undefined;
@@ -84,16 +264,12 @@
 
 
     catbus.uid = 0;
-    catbus._trees = {}; // trees by name
-    catbus._directions = null;
-    catbus._deepLinkers = {};
-    catbus._currentDeepLinker = 'raw';
     catbus._locations = {};
     catbus._hosts = {}; // hosts by name
     catbus._primed = false;
-    catbus._queueFrame = createQueueFrame();
-
-
+    catbus._queueFrame = [];
+    catbus._defaultZone = null;
+    
     catbus.dropHost = function(name){
 
         var hosts = catbus._hosts;
@@ -109,54 +285,23 @@
         delete hosts[name];
     };
 
-    catbus.location = catbus.demandData = function(nameOrNames){
-        var zone = catbus.tree();
-        return zone.demandLocation(nameOrNames);
+    catbus.demandPlace = catbus.demandZone = function(name){
+        var root = catbus._defaultZone = catbus._defaultZone || new Zone();
+        return root.demandChild(name);
     };
 
-    catbus.sensor = catbus.createSensor = function(){
-
-        var zone = catbus.demandTree();
-        return zone.createSensor();
-
+    catbus.demandData = catbus.location = function(nameOrNames){
+        var zone = catbus._defaultZone = catbus._defaultZone || new Zone();
+        return zone.demandData(nameOrNames);
     };
 
-    catbus.watch = function(nameOrNames) {
-        return catbus.sensor().watch(nameOrNames);
-    };
-
-    catbus.matchTopics = function(sensorTopic, locationTopic){
-
-        return sensorTopic === "*" || sensorTopic === locationTopic;
-    };
-
-    catbus.envelope = function(msg, topic, tag, owner){
-
-        return {
-            prior: (owner) ? owner._last : null,
-            msg: msg,
-            topic: topic,
-            tag: tag,
-            owner: owner,
-            id: ++catbus.uid,
-            sent: Date.now()
-        }
-
+    catbus.envelope = function(msg, topic, tag){
+        return new Envelope(msg, topic, tag);
     };
 
     catbus.queue = function(sensor) {
 
-        var arr;
-        var q = this._queueFrame;
-        if(sensor._defer) {
-            if (sensor._batch) {
-                arr = q.batchAndDefer;
-            } else {
-                arr = q.defer;
-            }
-        } else {
-            arr = q.batch;
-        }
+        var arr = this._queueFrame;
         arr.push(sensor);
 
         if (this._primed) return;
@@ -167,127 +312,52 @@
 
     };
 
-    catbus._processTellArray = function(arr){
-
-        while(arr.length){
-            var sensor = arr.shift();
-            sensor.send();
-        }
-
-    };
-
-
 
     catbus.flush = function(){
 
         this._primed = false;
 
-        // todo add max loop depth to avoid infinite message doom
-        while(this.hasQueuedMessages()) {
+        var passes = 0;
 
-            var q = this._queueFrame;
-            this._queueFrame = createQueueFrame();
+        while(this._queueFrame.length > 0) {
 
-            this._processTellArray(q.defer);
-            this._processTellArray(q.batch);
-            this._processTellArray(q.batchAndDefer);
+            passes++;
+            var arr = this._queueFrame;
+            this._queueFrame = [];
+
+            while(arr.length){
+                var sensor = arr.shift();
+                sensor.send();
+            }
 
         }
 
     };
 
-    catbus.hasQueuedMessages = function(){
 
-        var q = this._queueFrame;
-        return q.defer.length || q.batch.length || q.batchAndDefer.length;
+    var Envelope = function(msg, topic, tag){
 
-    };
-
-    catbus.tree = catbus.demandTree = function(name){
-
-        name = name || 'DEFAULT';
-        var trees = catbus._trees;
-        var tree = trees[name] || (trees[name] = catbus._createTree(name));
-        return tree;
+        this.msg = msg;
+        this.topic = topic;
+        this.tag = tag;
+        this.id = ++catbus.uid;
+        this.sent = Date.now();
 
     };
 
-    catbus.defineDeepLinker = function(name, toLink, toDirections){
-
-        catbus._deepLinkers[name] = {toLink: toLink, toDirections: toDirections};
-
-    };
-
-    catbus.defineDeepLinker('raw',
-        function toLink(directions){
-            return encodeURIComponent(JSON.stringify(directions));
-        },
-        function toDirections(link){
-            return JSON.parse(decodeURIComponent(link));
-        }
-    );
-
-    catbus.setDeepLinker = function(name){
-        catbus._currentDeepLinker = name || 'raw';
-
-    };
-
-    catbus._createTree = function(name){
-
-        var tree = new Zone(name);
-        var directions = tree.demandData('__DIRECTIONS__');
-        var link = tree.demandData('__DEEP_LINK__');
-        directions.createSensor().on('update').batch().run(function(msg){
-            //console.log('directions:',(msg));
-            var deepLinkerName = catbus._currentDeepLinker;
-            var link = (catbus._deepLinkers[deepLinkerName]).toLink(msg);
-            //var dir = (catbus._deepLinkers[deepLinkerName]).toDirections(link);
-            //console.log('raw link', link);
-            //console.log('trans dir', dir);
-
-            window.history.replaceState(null,null,window.location.origin + window.location.pathname + '?' + deepLinkerName + '=' + link);
-        });
-
-        return tree;
-
-    };
-
-    catbus.lookForDirections = function(searchStr){
-        if(searchStr.indexOf('?lzs=') === 0) {
-            var linkData = searchStr.substr(5);
-            return {linkType: 'lzs', linkData: linkData};
-        }
-        return null;
-
-    };
-
-    catbus.resolveDirections = function(searchStr){
-
-        var encoding = catbus.lookForDirections(searchStr);
-        if(!encoding) return;
-
-        var directions = (catbus._deepLinkers[encoding.linkType]).toDirections(encoding.linkData);
-        return directions;
-
-    };
-
-    var Zone = function(name, isRoute) {
+    
+    var Zone = function(name) {
 
         this._id = ++catbus.uid;
-        this._tree = null;
         this._name = name || this._id;
         this._parent = null;
         this._children = {}; // by name
         this._locations = {}; // by name
         this._valves = null;
         this._sensors = {}; // by id
-        this._routeKey = '';
-        this._isRoute = isRoute || false;
         this._dropped = false;
 
     };
-
-
 
 
     Zone.prototype.drop = function(){
@@ -343,8 +413,8 @@
         return result;
     };
 
-    Zone.prototype.demandChild = function(name, isRoute){
-        return this._children[name] || this._createChild(name, isRoute);
+    Zone.prototype.demandChild = function(name){
+        return this._children[name] || this._createChild(name);
     };
 
     Zone.prototype._createChild = function(name, isRoute){
@@ -363,32 +433,19 @@
 
     Zone.prototype.assignParent = function(newParent){
 
-// todo test name collision, initial block colons from user names
         var oldParent = this._parent;
         if(oldParent)
             delete oldParent._children[this._name];
         this._parent = newParent;
 
         if(newParent) {
-            this._tree = newParent._tree || newParent;
             newParent._children[this._name] = this;
         }
-        this._determineRouteKey();
-
+        
         return this;
 
     };
-
-    Zone.prototype._determineRouteKey = function(){
-        var baseKey = this._parent && this._parent._routeKey || '';
-        if(this._isRoute && this._name){
-            this._routeKey = baseKey ? baseKey + '.' + this._name : this._name;
-        } else {
-            this._routeKey = baseKey;
-        }
-
-    };
-
+    
 
     Zone.prototype.sensor = Zone.prototype.createSensor = function(){
 
@@ -398,20 +455,20 @@
 
     };
 
-    Zone.prototype.demandLocation = Zone.prototype.demandData = function (nameOrNames){
+    Zone.prototype.demandData = Zone.prototype.demandLocation = function (nameOrNames){
 
         var names = toNameArray(nameOrNames);
 
         if(names.length === 1)
-            return this._demandLocation(names[0]);
+            return this._demandData(names[0]);
 
         // if an array of names, return a multi-location
-        var multiLoc = this._demandLocation();
+        var multiLoc = this._demandData();
         var locations = multiLoc._multi = [];
 
         for(var i = 0; i < names.length; i++){
             var name = names[i];
-            locations.push(this._demandLocation(name));
+            locations.push(this._demandData(name));
         }
 
         return multiLoc;
@@ -419,7 +476,7 @@
     };
 
 
-    Zone.prototype._demandLocation = function(name){
+    Zone.prototype._demandData = function(name){
 
         var locations = this._locations;
         var location = locations[name];
@@ -457,7 +514,7 @@
         }
 
         if(data_list.length > 1){
-            result = this._demandLocation();
+            result = this._demandData();
             result._multi = data_list;
         } else if (data_list.length === 1) {
             result = data_list[0];
@@ -650,7 +707,7 @@
 
     Cluster.prototype._tell = function(msg, topic, tag){
         if(this._dropped) return;
-        this._lastEnvelope = catbus.envelope(msg, topic, tag, this); // message stored enveloped before sending and transforming
+        this._lastEnvelope = catbus.envelope(msg, topic, tag); // message stored enveloped before sending and transforming
         var sensors = [].concat(this._sensors);
         for(var i = 0; i < sensors.length; i++){
             var sensor = sensors[i];
@@ -710,19 +767,12 @@
     };
 
 
-    var bus_config = {
-
-    };
-
-    var location_config = {
-
-        on: {name: 'on', alias: ['topic','sensor'], type: 'string' , setter: '_setTopic', getter: '_getTopic'},
-        tag: {name: 'tag', type: 'string' , prop: '_tag'}
-
-    };
-
     var sensor_config = {
 
+        last: {name: 'last', prop: '_keep', setter: '_setLast'},
+        first: {name: 'first', prop: '_keep', setter: '_setFirst'},
+        all: {name: 'all', prop: '_keep', setter: '_setAll'},
+        sync: {name: 'sync', prop: '_keep', setter: '_setSync'},
         keep: {name: 'keep', options: ['last', 'first', 'all'], prop: '_keep', default_set: 'last'},
         retain: {name: 'retain', type: 'boolean', prop: '_retain', default_set: true},
         need: {name: 'need', transform: '_toStringArray', valid: '_isStringArray', prop: '_needs'}, // todo, also accept [locs] to tags
@@ -742,7 +792,6 @@
         sleep: {name: 'sleep', no_arg: true , prop: '_active', default_set: false},
         wake: {name: 'wake', no_arg: true , prop: '_active', default_set: true},
         on: {name: 'on', alias: ['topic','sense'], type: 'string' , setter: '_setTopic', getter: '_getTopic'},
-        //watch:  {name: 'watch', alias: ['location','at'], transform: '_toLocation', valid: '_isLocation', setter: '_watch', getter: '_getLocation'},
         exit:  {name: 'exit', alias: ['transform'], type: 'function', functor: true, prop: '_transformMethod'},
         enter: {name: 'enter', alias: ['conform','adapt'], type: 'function', functor: true, prop:'_appear'},
         extract: {name: 'extract',  transform: '_toString', type: 'string', prop:'_extract'},
@@ -826,10 +875,6 @@
         return this._cluster && this._cluster._location;
     };
 
-    Sensor.prototype._toLocation = function(nameOrLocation){
-        return (typeof nameOrLocation === 'string') ? this._zone._demandLocation(nameOrLocation) : nameOrLocation;
-    };
-
     Sensor.prototype._isLocation = function(location){
         return location instanceof Location;
     };
@@ -839,33 +884,6 @@
             return this._multi;
         else
             return [this];
-    };
-
-    Sensor.prototype.watch = function(namesOrLocations, where, optional){
-
-        var locations = this._zone.findData(namesOrLocations, where, optional);
-        var sensor;
-        var loc_list = locations.toArray();
-        var loc;
-        var new_sensors = [];
-
-        for(var i = 0; i < loc_list.length; i++){
-            loc = loc_list[i];
-            sensor = loc.createSensor();
-            new_sensors.push(sensor);
-        }
-
-        if(this._cluster && this._cluster._location)
-            new_sensors.push(this);
-
-        if(new_sensors.length === 0)
-            return this;
-        else if(new_sensors.length === 1)
-            return new_sensors[0];
-
-        this._multi = new_sensors;
-        return this;
-
     };
 
 
@@ -1087,6 +1105,38 @@
 
     };
 
+    Sensor.prototype._setSync = function(){
+
+        this._batch = false;
+        this._keep = 'none';
+        return this;
+
+    };
+
+    Sensor.prototype._setFirst = function(){
+
+        this._batch = true;
+        this._keep = 'first';
+        return this;
+
+    };
+
+    Sensor.prototype._setLast = function(){
+
+        this._batch = true;
+        this._keep = 'last';
+        return this;
+
+    };
+
+    Sensor.prototype._setAll = function(){
+
+        this._batch = true;
+        this._keep = 'all';
+        return this;
+
+    };
+
 
     Sensor.prototype._setBatch = function(batch){
 
@@ -1108,6 +1158,7 @@
 
     Sensor.prototype.auto = Sensor.prototype.autorun = function() {
 
+        // todo sync CYCLE start
         var sensors = this._multi || [this];
 
         for(var i = 0; i < sensors.length; i++){
@@ -1116,6 +1167,8 @@
             if(packet && packet.msg != undefined)
                 s.tell(packet.msg, packet.topic, s._getTag(), true); // was packet.tag -- breaks?
         }
+
+        // todo sync CYCLE end
 
         return this;
     };
@@ -1138,6 +1191,7 @@
     };
 
 
+    // todo add 'add' sensor to multi, accept one or array or multi
 
     Sensor.prototype.merge = Sensor.prototype.next =function(mergeTopic) {
 
@@ -1145,7 +1199,7 @@
 
         var sensors = this._multi || [this];
 
-        var mergeLoc = this._mergeLoc = this._zone._demandLocation(); // demandLocation('auto:' + (catbus.uid + 1));
+        var mergeLoc = this._mergeLoc = this._zone._demandData(); // demandLocation('auto:' + (catbus.uid + 1));
 
         var mergeHost = this._host && this._host._name;
         var mergeContext = this._context;
@@ -1157,7 +1211,6 @@
             s.pipe(mergeLoc);
         }
         var mergedSensor = mergeLoc.on(mergeTopic).host(mergeHost).as(mergeContext);
-        //var mergedSensor = mergeLoc.sensor().host(mergeHost).as(mergeContext);
         return mergedSensor;
 
     };
@@ -1188,12 +1241,12 @@
 
     };
 
-
-
     Sensor.prototype.tell = function(msg, topic, tag, auto) {
 
         if(!this._active || this._dropped)
             return this;
+
+        // todo change so gather watches but doesn't prime
 
         if(this._gather && this._gather.length > 0)
             msg = this._applyGathered(msg, topic, tag);
@@ -1223,7 +1276,7 @@
 
             topic = (this._emit) ? this._emit.call(this._context || this, msg, topic, tag) : topic;
             msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
-            this._postcard = catbus.envelope(msg, topic, tag, this);
+            this._postcard = catbus.envelope(msg, topic, tag);
         }
 
         if(this._cancel && !this._cancel.call(this._context || this, msg, topic, tag)) {
@@ -1269,10 +1322,11 @@
 
     Sensor.prototype._applyGathered = function(msg, topic, tag){
 
+        // todo this is stupid not performant -- fix to one time lookup
+
         var consolidated = {};
         var zone = this._zone;
 
-        //consolidated[this._getTag()] = msg;
 
         var optional = this._optional; //todo add optional to sensor
 
@@ -1316,7 +1370,7 @@
         topic = (this._emit) ? this._emit.call(this._context || this, msg, topic , tag) : topic;
         msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
 
-        this._postcard = catbus.envelope(msg, topic, tag, this);
+        this._postcard = catbus.envelope(msg, topic, tag);
 
     };
 
@@ -1340,7 +1394,7 @@
         msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
         topic = (this._emit) ? this._emit.call(this._context || this, msg, topic , tag) : topic;
 
-        this._postcard = catbus.envelope(msg, topic, tag, this);
+        this._postcard = catbus.envelope(msg, topic, tag);
 
     };
 
@@ -1368,7 +1422,7 @@
 
         this._last = postcard;
 
-        if(this._pipe){
+        if(this._pipe){ // todo sync cycle check
             this._pipe.tell(postcard.msg, postcard.topic, this._getTag(), this);
         } else {
             if(typeof (this._callback) !== 'function') return this;
@@ -1395,7 +1449,6 @@
         this._tag = name; // default
         this._clusters = {}; // by topic
         this._appear = undefined;
-        this._isLink = false; // link data will be stored in the route of the tree
         this._zone = null;
         this._service = null;
         this._routeKey = '';
@@ -1406,68 +1459,8 @@
 
     };
 
-    Location.prototype.route = function(){
-
-        this._isRoute = true;
-        this._determineRouteKey();
-
-    };
-
-    Location.prototype.method = function(requestTopic, responseTopic, method){
-        // todo: maintain hash by requestTopic for dropping and redefining methods
-        this._methodMap[requestTopic] = responseTopic;
-        this.on(requestTopic).transform(method).emit(responseTopic).pipe(this);
-    };
-
-    Location.prototype.invoke = function(requestTopic, requestData){
-        this.write(requestData, requestTopic);
-        var responseTopic = this._methodMap[requestTopic];
-        return this.read(responseTopic);
-    };
-
-    Location.prototype._determineRouteKey = function(){
-
-        if(!this._isRoute) {
-            this._routeKey = this._zone._routeKey;
-        } else {
-            var zoneRouteKey = this._zone._routeKey ? (this._zone._routeKey + '.') : '';
-            this._routeKey = zoneRouteKey + this._name; // gets to hash of values by topic
-        }
-    };
-
-    Location.prototype.initialize = function(msg, topic){
-
-        if(!this._isRoute) {
-            this.write(msg, topic);
-            return this;
-        }
-
-        topic = topic || 'update';
-
-        var directionsByTopic = this._getDirections();
-        if(!directionsByTopic.hasOwnProperty(topic))
-            directionsByTopic[topic] = msg;
-
-        this._applyDirections(directionsByTopic);
-
-    };
 
 
-    Location.prototype.service = function(service){
-        if(arguments.length === 0)
-            return this._service;
-
-        this._service = service;
-        return this;
-    };
-
-    Location.prototype.req = Location.prototype.request = function(params){
-        if(params){
-            this._service.request(params);
-        }  else {
-            this._service.request();
-        }
-    };
 
     Location.prototype.drop = Location.prototype.destroy = function(){
 
@@ -1482,10 +1475,6 @@
 
     };
 
-    Location.prototype.toString = function() {
-        return "[Location]: " + this._name;
-    };
-
     Location.prototype.tag = function(tag){
         if(arguments.length === 0) return this._tag;
         this._tag = tag;
@@ -1496,13 +1485,8 @@
         return this._name || null;
     };
 
-    Location.prototype.conform = Location.prototype.adapt = Location.prototype.transform = function(f){
-        this._appear = createFunctor(f);
-        return this;
-    };
 
-
-    Location.prototype.on = Location.prototype.sensor = Location.prototype.createSensor = function(topicOrTopics){
+    Location.prototype.createSensor = Location.prototype.on = Location.prototype.sensor = function(topicOrTopics){
 
         var topic_list;
         var loc_list;
@@ -1545,11 +1529,9 @@
         return sensor;
     };
 
-
     Location.prototype._findCluster = function(topic){
         return this._clusters[topic];
     };
-
 
     Location.prototype._demandCluster = function(topic){
         if(typeof topic !== 'string'){
@@ -1557,13 +1539,6 @@
         }
         return this._findCluster(topic) || (this._clusters[topic] = new Cluster(topic, this));
     };
-
-    //Location.prototype._destroyCluster = function(topic){
-    //    if(topic === 'update') return; // default topic not disposed
-    //    var cluster = this._findCluster(topic);
-    //    if(!cluster || cluster._sensors.length > 0) return null;
-    //    delete this._clusters[topic];
-    //};
 
     Location.prototype.peek = function(topic){
         if(arguments.length == 0)
@@ -1575,77 +1550,35 @@
 
     };
 
-    Location.prototype.look = Location.prototype.read = function(topic) {
+    // todo split internal data write vs public external to monitor 'fire' -- also add auto/fire check
+    Location.prototype.read = Location.prototype.look = function(topic) {
         topic = topic || 'update';
         var packet = this.peek(topic);
         return (packet) ? packet.msg : undefined;
     };
 
-    Location.prototype._getDirections = function() {
 
-        this._determineRouteKey();
-        var directionsData = this._zone._tree.demandData('__DIRECTIONS__');
-        var directions = directionsData.read() || {};
-        var directionsByTopic = directions[this._routeKey];
-        return directionsByTopic || {};
-
-    };
-
-    Location.prototype._applyDirections = function(specificDirections){
-
-        var directionsByTopic = specificDirections || this._getDirections();
-
-        if(directionsByTopic){
-
-            var writes = [];
-            for(var topic in directionsByTopic){
-                if(topic !== '*') {
-                    writes.push({msg: directionsByTopic[topic], topic: topic});
-                }
-            }
-
-            for(var i = 0; i < writes.length; i++){
-                this.write(writes[i].msg, writes[i].topic);
-            }
-
-        }
-
-    };
-
-    Location.prototype.tell = Location.prototype.write  = function(msg, topic, tag){
+    Location.prototype.write = Location.prototype.tell = function(msg, topic, tag, fire){
 
         topic = topic || 'update';
         tag = tag || this.tag();
 
-        // add context code
-        msg = (typeof this._appear === 'function') ? this._appear.call(this._context || this, msg, topic, tag) : msg;
-
         this._demandCluster(topic);
 
-        if(this._isRoute){
-
-            var directionsData = this._zone._tree.demandData('__DIRECTIONS__');
-            var directions = directionsData.read() || {};
-            var directionsByTopic = directions[this._routeKey] = directions[this._routeKey] || {};
-            directionsByTopic[topic] = msg;
-            directionsData.write(directions);
-
-        }
-
         for(var t in this._clusters){
-            if(catbus.matchTopics(t,topic)){
+            if(t === "*" || t === topic){
                 var cluster = this._clusters[t];
-                cluster._tell(msg, topic, tag);
+                cluster._tell(msg, topic, tag, fire);
             }
         }
     };
 
     Location.prototype.refresh = function(topic, tag){
-        this.write(this.read(topic),topic, tag);
+        this.write(this.read(topic),topic, tag, true);
     };
 
     Location.prototype.toggle = function(topic, tag){
-        this.write(!this.read(topic),topic, tag);
+        this.write(!this.read(topic),topic, tag, true);
     };
 
     var selector = typeof jQuery !== 'undefined' && jQuery !== null ? jQuery : null;
