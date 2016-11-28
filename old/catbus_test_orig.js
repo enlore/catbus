@@ -62,22 +62,22 @@ describe('Catbus', function(){
         lands = bus.demandData(['tree','boat','desert']);
     });
 
-    describe('Scopes', function(){
+    describe('Zones', function(){
 
 
         it('makes and finds trees', function(){
 
-            var fruitTree = bus.demandScope('fruit');
-            var catsTree = bus.demandScope('cats');
+            var fruitTree = bus.demandZone('fruit');
+            var catsTree = bus.demandZone('cats');
 
-            assert.equal(fruitTree === bus.demandScope('fruit'), true);
-            assert.equal(catsTree === bus.demandScope('cats'), true);
+            assert.equal(fruitTree === bus.demandZone('fruit'), true);
+            assert.equal(catsTree === bus.demandZone('cats'), true);
 
         });
 
-        it('makes child scopes', function(){
+        it('makes child zones', function(){
 
-            var fruitTree = bus.demandScope('fruit');
+            var fruitTree = bus.demandZone('fruit');
 
             var sour = fruitTree.demandChild('sour');
             var sweet = fruitTree.demandChild('sweet');
@@ -88,9 +88,9 @@ describe('Catbus', function(){
 
         });
 
-        it('makes child of child scopes', function(){
+        it('makes child of child zones', function(){
 
-            var fruitTree = bus.demandScope('fruit');
+            var fruitTree = bus.demandZone('fruit');
 
             var sour = fruitTree.demandChild('sour');
             var sweet = fruitTree.demandChild('sweet');
@@ -115,7 +115,7 @@ describe('Catbus', function(){
 
         it('finds data up the tree', function(){
 
-            var fruitTree = bus.demandScope('fruit');
+            var fruitTree = bus.demandZone('fruit');
             fruitTree.demandData('owner').write('Scott');
 
             var sour = fruitTree.demandChild('sour');
@@ -123,13 +123,13 @@ describe('Catbus', function(){
             var tart = fruitTree.demandChild('tart');
 
             var mango = sweet.demandChild('mango');
-            mango.demandData('owner').write('Landon');
+            mango.demandLocation('owner').write('Landon');
 
             var owner = sour.findData('owner').read(); // owner at fruit level
             assert.equal(owner, 'Scott');
 
-            sweet.demandData('owner').write('Lars');
-            sour.demandData('owner').write('Nick');
+            sweet.demandLocation('owner').write('Lars');
+            sour.demandLocation('owner').write('Nick');
 
             owner = sweet.findData('owner').read();
             assert.equal(owner, 'Lars');
@@ -137,22 +137,42 @@ describe('Catbus', function(){
             owner = sour.findData('owner').read();
             assert.equal(owner, 'Nick');
 
+            owner = sour.findData('owner', 'last').read();
+            assert.equal(owner, 'Scott');
+
             owner = tart.findData('owner').read();
             assert.equal(owner, 'Scott');
 
             owner = mango.findData('owner').read();
             assert.equal(owner, 'Landon');
 
+            owner = mango.findData('owner', 'first').read();
+            assert.equal(owner, 'Landon');
+
+            owner = mango.findData('owner', 'local').read();
+            assert.equal(owner, 'Landon');
+
+            owner = mango.findData('owner', 'parent').read();
+            assert.equal(owner, 'Lars');
+
+            owner = mango.findData('owner', 'outer').read();
+            assert.equal(owner, 'Lars');
+
+            owner = mango.findData('owner', 'last').read();
+            assert.equal(owner, 'Scott');
+
+            owner = mango.findData('owner', 'in sweet').read();
+            assert.equal(owner, 'Lars');
 
         });
 
 
     });
 
-    describe('Datas', function(){
+    describe('Locations', function(){
 
 
-        it('makes datas', function(){
+        it('makes locations', function(){
             assert.equal('object', typeof tree);
             assert.equal(3, lands._multi.length);
         });
@@ -235,13 +255,13 @@ describe('Catbus', function(){
             //bugs.run(_logger);
 
             tree.write('poop');
-            bus.data('desert').write('dry');
+            bus.location('desert').write('dry');
 
             bugs = bugs.merge().group().last();
             //bugs = bugs.batch().merge().group();
             bugs.run(_logger);
             tree.write('poop');
-            bus.data('desert').write('dry');
+            bus.location('desert').write('dry');
         });
 
     });
@@ -313,7 +333,7 @@ describe('Catbus', function(){
 
                 girl.drop();
                 castle.write('silence');
-                assert.equal('silence', castle.read()); // data has new data
+                assert.equal('silence', castle.read()); // location has new data
                 assert.equal(undefined, girl.read()); // sensor has no data
                 assert.equal(0, _invoked); // did not run callback
 
@@ -436,8 +456,8 @@ describe('Catbus', function(){
 
                 girl.drop();
                 castle.write('Howl moves');
-                assert.equal('Howl moves', castle.read()); // data has new data
-                assert.equal('Howl flies', castle.read('fly')); // data still has alternate topic data
+                assert.equal('Howl moves', castle.read()); // location has new data
+                assert.equal('Howl flies', castle.read('fly')); // location still has alternate topic data
                 assert.equal(undefined, girl.read()); // sensor has no data
                 assert.equal(0, _invoked); // did not run callback
 

@@ -1,5 +1,5 @@
 /**
- * catbus.js (v4.0.0) --
+ * catbus.js (v3.0.0) --
  *
  * Copyright (c) 2016 Scott Southworth, Landon Barnickle, Nick Lorenson & Contributors
  *
@@ -217,6 +217,7 @@
 
 
     function createFunctor(val) {
+        //if(val === undefined) return undefined;
         return (typeof val === 'function') ? val : function() { return val; };
     }
 
@@ -228,6 +229,22 @@
 
         return arg;
 
+    }
+
+    function firstWord(str){
+        if(!str) return '';
+        var i = str.indexOf(' ');
+        if(i === -1)
+            return str;
+        return str.substring(0, i);
+    }
+
+    function afterWord(str){
+        if(!str) return '';
+        var i = str.indexOf(' ');
+        if(i === -1)
+            return '';
+        return str.substring(i + 1);
     }
 
     function stringToTrimmedArray(str, delimiter){
@@ -247,12 +264,12 @@
 
 
     catbus.uid = 0;
-    catbus._datas = {};
+    catbus._locations = {};
     catbus._hosts = {}; // hosts by name
     catbus._primed = false;
     catbus._queueFrame = [];
-    catbus._defaultScope = null;
-
+    catbus._defaultZone = null;
+    
     catbus.dropHost = function(name){
 
         var hosts = catbus._hosts;
@@ -268,14 +285,14 @@
         delete hosts[name];
     };
 
-    catbus.demandPlace = catbus.demandScope = function(name){
-        var root = catbus._defaultScope = catbus._defaultScope || new Scope();
+    catbus.demandPlace = catbus.demandZone = function(name){
+        var root = catbus._defaultZone = catbus._defaultZone || new Zone();
         return root.demandChild(name);
     };
 
-    catbus.demandData = catbus.data = function(nameOrNames){
-        var scope = catbus._defaultScope = catbus._defaultScope || new Scope();
-        return scope.demandData(nameOrNames);
+    catbus.demandData = catbus.location = function(nameOrNames){
+        var zone = catbus._defaultZone = catbus._defaultZone || new Zone();
+        return zone.demandData(nameOrNames);
     };
 
     catbus.envelope = function(msg, topic, tag){
@@ -318,387 +335,32 @@
     };
 
 
-
-    var TRANSFORM_METHOD = 'transformMethod';
-    var TOPIC_METHOD = 'topicMethod';
-    var SOURCE_METHOD = 'sourceMethod';
-    var DELAY_METHOD = 'delayMethod';
-    var FILTER_METHOD = 'filterMethod';
-    var GROUP_METHOD = 'groupMethod';
-    var KEEP_METHOD = 'keepMethod';
-    var KEEP_COUNT = 'keepCount';
-    var RETAIN_METHOD = 'retainMethod';
-
-    var TRUE_FUNC = function(){ return true;};
-    var FALSE_FUNC = function(){ return false;};
-    var TO_SOURCE_FUNC = function(msg, topic, source){ return source;};
-    var TO_MSG_FUNC = function(msg, topic, source){ return msg;};
-    var TO_TOPIC_FUNC = function(msg, topic, source){ return topic;};
-
-    var KEEP_LAST = function(messages, n){
-        if(n)
-            return message.splice(-n);
-        return messages[messages.length - 1]
-    };
-    var KEEP_FIRST = function(messages, n){
-        if(n)
-            return message.splice(0, n);
-        return messages[0]
-    };
-
-    var KEEP_ALL = function(messages){ return messages; };
-
-
-
-    var Frame = function(sensor, prevFrame){
-
-        this.sensor = sensor;
-        this.prevFrame = prevFrame || null;
-        this.nextFrame = null;
-        this.streams = [];
-
-    };
-
-    Frame.prototype.transform = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.transform requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(TRANSFORM_METHOD, method);
-
-    };
-
-    Frame.prototype.topic = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.topic requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(TOPIC_METHOD, method);
-
-    };
-
-    Frame.prototype.source = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.source requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(SOURCE_METHOD, method);
-
-    };
-
-    Frame.prototype.delay = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.delay requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(DELAY_METHOD, method);
-
-    };
-
-    Frame.prototype.filter = function(method){
-
-        if(arguments.length === 0 || typeof method !== 'function')
-            throw new Error('Sensor.frame.filter requires one function argument.');
-
-        return this.addFrame(FILTER_METHOD, method);
-
-    };
-
-    Frame.prototype.group = function(method){
-
-        method = arguments.length === 1 ? createFunctor(method) : TO_SOURCE_FUNC;
-
-        var nextFrame = this.addFrame(GROUP_METHOD, method);
-        nextFrame.modifyFrame(KEEP_METHOD, KEEP_LAST);
-
-        return nextFrame;
-
-    };
-
-    Frame.prototype.retain = function(method){
-
-        method = arguments.length === 0 ? TRUE_FUNC : method;
-
-        if(typeof method !== 'function')
-            throw new Error('Sensor.frame.retain accepts only a function as an optional argument.');
-
-
-        return this.modifyFrame(RETAIN_METHOD, method);
-
-    };
-
-    Frame.prototype.last = function(n){
-
-        n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_LAST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
-
-    };
-
-    Frame.prototype.first = function(n){
-
-        n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_FIRST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
-
-    };
-
-
-    Frame.prototype.all = function(){
-
-        return this.modifyFrame(KEEP_METHOD, KEEP_ALL);
-
-    };
-
-
-
-    // create a new frame with matching empty streams fed by the current frame
-
-    Frame.prototype.addFrame = function(prop, val){
-
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
-        var streams = this.streams;
-        var len = streams.length;
-        var destStreams = nextFrame.streams;
-
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            var destStream = new Stream(nextFrame);
-            destStream[prop] = val;
-            stream.nextStream = destStream;
-            destStreams.push(destStream);
-
-        }
-
-        return nextFrame;
-
-    };
-
-    Frame.prototype.modifyFrame = function(prop, val){
-
-
-        var streams = this.streams;
-        var len = streams.length;
-
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            stream[prop] = val;
-
-        }
-
-        return this;
-
-    };
-
-
-    // create a new frame with one stream fed by all streams of the current frame
-
-    Frame.prototype.mergeFrame = function(){
-
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
-        var streams = this.streams;
-        var destStream = new Stream(nextFrame);
-        nextFrame.streams.push(destStream);
-
-        for(var i = 0; i < streams; i++){
-
-            var origStream = streams[i];
-            origStream.nextStream = destStream;
-
-        }
-
-        return nextFrame;
-
-    };
-
-
-    var Stream = function(frame){
-
-        this.frame = frame;
-        this.dead = false;
-        this.nextStream = null;
-        this.lastPacket = null;
-        this.name = null;
-        this.topic = null;
-
-        this.messages = [];
-        this.messagesByKey = {};
-        this.keepMethod = KEEP_LAST;
-        this.keepCount = 0; // non-zero creates an array
-        this.groupMethod = null;
-        this.transformMethod = null;
-        this.filterMethod = null;
-        this.topicMethod = null;
-        this.sourceMethod = null;
-        this.delayMethod = null;
-
-        this.readyMethod = null;
-        this.retainMethod = null;
-        this.schedule = null; // throttle, debounce, defer, batch
-
-        this.primed = false;
-
-    };
-
-
-    // timer new -- group
-    // last of a stream, then merge, then group, retain (mix transform), last
-
-
-    Stream.prototype.tell = function(msg, topic, source) {
-
-        if(this.dead) // true if canceled or disposed midstream
-            return this;
-
-        var last = this.lastPacket;
-
-        if(this.filterMethod && !this.filterMethod(msg, topic, source, last))
-            return;
-
-        if(this.groupMethod) {
-            this.tellGroup(msg, topic, source, last);
-        } else if (this.schedule) {
-            this.tellHold(msg, topic, source, last);
-        } else if (this.delayMethod) {
-            this.tellDelay(msg, topic, source);
-        } else {
-            this.tellSync(msg, topic, source, last);
-        }
-
-        return this;
-
-    };
-
-    Stream.prototype.tellDelay = function(msg, topic, source) {
-
-        var nextStream = this.nextStream;
-        setTimeout(nextStream.tell.bind(nextStream), this.delayMethod() || 0, msg, topic, source);
-
-    };
-
-    Stream.prototype.tellSync = function(msg, topic, source, last) {
-
-        msg = this.transformMethod ? this.transformMethod(msg, topic, source, last) : msg;
-        topic = this.topicMethod ? this.topicMethod(msg, topic, source, last) : topic;
-        source = this.sourceMethod ? this.sourceMethod(msg, topic, source, last) : source;
-
-        var nextStream = this.nextStream;
-
-        this.lastPacket = new Packet(msg, topic, source);
-
-        if (nextStream) {
-                nextStream.tell(msg, topic, source);
-        }
-
-    };
-
-
-    Stream.prototype.tellGroup = function(msg, topic, source, last) {
-
-        var retain = this.retainMethod(msg, topic, source, last);
-        var groupName = this.groupMethod(msg, topic, source, last);
-
-        var messages = this.messagesByKey[groupName] = this.messagesByKey[groupName] || [];
-        messages.push(msg);
-
-        this.primed = this.primed || this.readyMethod(this.messages, this.messagesByKey, last);
-
-        // if this ready, call schedule func, back to tellGroupForward
-    };
-
-    Stream.prototype.tellHold = function(msg, topic, source, last) {
-
-
-
-
-    };
-
-    Holder.prototype.resolveContent = function() {
-
-        var content = this._by === undefined ? this.resolveListContent() : this.resolveGroupedContent();
-
-
-    };
-
-    Holder.prototype.resolveListContent = function() {
-
-        var keep = this._keep;
-        var messages = this._messages;
-
-        if(keep === KEEP_FIRST)
-            return messages[0];
-
-        if(keep === KEEP_LAST)
-            return messages[messages.length - 1];
-
-
-        return messages;
-
-    };
-
-    Holder.prototype.resolveGroupedContent = function() {
-
-        var content = {};
-        for(var name in this._groups){
-            var holder = this._groups[name];
-            content[name] = holder.resolveContent();
-        }
-
-        return content;
-
-    };
-
-    // mustSee, hasSeen, mustCount,
-
-    Holder.prototype.needs = function(arrOrFunc){
-
-        // array of content hash or func on content
-
-    };
-
-    Holder.prototype.isReady = function(){
-
-    };
-
-    var Packet = function(msg, topic, source){
+    var Envelope = function(msg, topic, tag){
 
         this.msg = msg;
-        this.topic = topic || 'update';
-        this.source = source;
-        this.timestamp = Date.now();
+        this.topic = topic;
+        this.tag = tag;
+        this.id = ++catbus.uid;
+        this.sent = Date.now();
 
     };
 
     
-    var Scope = function(name) {
+    var Zone = function(name) {
 
         this._id = ++catbus.uid;
         this._name = name || this._id;
         this._parent = null;
         this._children = {}; // by name
-        this._dimensions = {data: {}}; // by dimension then data name
+        this._locations = {}; // by name
         this._valves = null;
         this._sensors = {}; // by id
         this._dropped = false;
 
     };
 
-    var Zone = Scope; // hack for now
 
-
-    Scope.prototype.drop = function(){
+    Zone.prototype.drop = function(){
 
         var i, key;
 
@@ -718,15 +380,15 @@
             sensor.drop();
         }
 
-        var data_keys = Object.keys(this._datas);
-        for(i = 0; i < data_keys.length; i++){
-            key = data_keys[i];
-            var data = this._datas[key];
+        var location_keys = Object.keys(this._locations);
+        for(i = 0; i < location_keys.length; i++){
+            key = location_keys[i];
+            var data = this._locations[key];
             data.drop(true);
         }
 
 
-        this._datas = null;
+        this._locations = null;
         this._sensors = null;
         this._children = null;
         this._valves = null;
@@ -736,13 +398,13 @@
 
     };
 
-    Scope.prototype.snapshot = function(){
+    Zone.prototype.snapshot = function(){
 
         var result = {id: this._id, name: this._name, children: [], data: [], sensors: [], valves: [], parent: this._parent && this._parent._name};
         var p;
 
         for(p in this._children) { result.children.push(p); };
-        for(p in this._datas) { result.data.push(p); };
+        for(p in this._locations) { result.data.push(p); };
         for(p in this._sensors) { result.data.push(p); };
 
         if(this._valves)
@@ -751,17 +413,17 @@
         return result;
     };
 
-    Scope.prototype.demandChild = function(name){
+    Zone.prototype.demandChild = function(name){
         return this._children[name] || this._createChild(name);
     };
 
-    Scope.prototype._createChild = function(name, isRoute){
-        var child = new Scope(name, isRoute);
+    Zone.prototype._createChild = function(name, isRoute){
+        var child = new Zone(name, isRoute);
         child.assignParent(this);
         return child;
     };
 
-    Scope.prototype.insertParent = function(newParent){
+    Zone.prototype.insertParent = function(newParent){
 
         var oldParent = this._parent;
         newParent.assignParent(oldParent);
@@ -769,7 +431,7 @@
         return this;
     };
 
-    Scope.prototype.assignParent = function(newParent){
+    Zone.prototype.assignParent = function(newParent){
 
         var oldParent = this._parent;
         if(oldParent)
@@ -785,59 +447,53 @@
     };
     
 
-    Scope.prototype.sensor = Scope.prototype.createSensor = function(){
+    Zone.prototype.sensor = Zone.prototype.createSensor = function(){
 
         var sensor = new Sensor();
-        sensor.scope(this);
+        sensor.zone(this);
         return sensor;
 
     };
 
-    Scope.prototype.demandData = Scope.prototype.demandData = function (nameOrNames){
+    Zone.prototype.demandData = Zone.prototype.demandLocation = function (nameOrNames){
 
         var names = toNameArray(nameOrNames);
 
         if(names.length === 1)
             return this._demandData(names[0]);
 
-        // if an array of names, return a multi-data
+        // if an array of names, return a multi-location
         var multiLoc = this._demandData();
-        var datas = multiLoc._multi = [];
+        var locations = multiLoc._multi = [];
 
         for(var i = 0; i < names.length; i++){
             var name = names[i];
-            datas.push(this._demandData(name));
+            locations.push(this._demandData(name));
         }
 
         return multiLoc;
 
     };
 
-    Scope.prototype._demandDimension = function(dimension){
 
-        return this._dimensions[dimension] = this._dimensions[dimension] || {};
+    Zone.prototype._demandData = function(name){
 
-    };
+        var locations = this._locations;
+        var location = locations[name];
 
-    Scope.prototype._demandData = function(name, dimension){
+        if(!location) {
 
-        dimension = dimension || 'data';
-        var datas = this._dimensions[dimension];
-        var data = datas[name];
-
-        if(!data) {
-
-            data = new Data(name);
-            datas[data._name] = data;
-            data._scope = this;
+            location = new Location(name);
+            locations[location._name] = location;
+            location._zone = this;
 
         }
 
-        return data;
+        return location;
 
     };
 
-    Scope.prototype.findData = function(nameOrArray, where, optional){
+    Zone.prototype.findData = function(nameOrArray, where, optional){
 
         var arr = toNameArray(nameOrArray);
         var data;
@@ -868,21 +524,38 @@
 
     };
 
-    Scope.prototype._findData = function(name) {
-            return this._findFirst(name);
+    Zone.prototype._findData = function(name, where, optional) {
+
+        where = where || 'first';
+
+        var container_name = null;
+        var result = null;
+
+        if (where === 'local')
+            result = this._locations[name];
+        else if (where === 'first' || !where)
+            result = this._findFirst(name);
+        else if (where === 'outer')
+            result = this._findOuter(name);
+        else if (where === 'last')
+            result = this._findLast(name);
+        else if (where === 'parent')
+            result = this._findFromParent(name);
+
+        if(firstWord(where) === 'in'){
+            container_name = afterWord(where);
+            result = this._findFirstIn(name, container_name);
+        }
+
+        if(result || optional)
+            return result;
+
+        throw new Error('Data find error: ' + where + ' ' + name);
+
     };
 
-    Scope.prototype.getData = function(name) {
-        return this._getData(name);
-    };
 
-
-    Scope.prototype._getData = function(name) {
-        return this._datas[name] || null;
-    };
-
-
-    Scope.prototype.valves = function(valves){
+    Zone.prototype.valves = function(valves){
 
         var hash = null;
 
@@ -899,51 +572,51 @@
 
     };
 
-    Scope.prototype._findFirstIn = function(name, containerName) {
+    Zone.prototype._findFirstIn = function(name, containerName) {
 
-        var scope = this;
+        var zone = this;
         var checkValve = false;
 
         do {
 
-            if(checkValve && scope._valves && !scope._valves[name])
+            if(checkValve && zone._valves && !zone._valves[name])
                 return null; // not white-listed by a valve
 
             checkValve = true; // not checked at the local level
 
-            if(scope._name === containerName) {
-                var result = scope._datas[name];
+            if(zone._name === containerName) {
+                var result = zone._locations[name];
                 if (result)
                     return result;
             }
 
-        } while (scope = scope._parent);
+        } while (zone = zone._parent);
 
         return null;
     };
 
-    Scope.prototype._findFirst = function(name, fromParent) {
+    Zone.prototype._findFirst = function(name, fromParent) {
 
-        var scope = this;
+        var zone = this;
         var checkValve = fromParent || false;
 
         do {
 
-            if(checkValve && scope._valves && !scope._valves[name])
+            if(checkValve && zone._valves && !zone._valves[name])
                 return null; // not white-listed by a valve
 
             checkValve = true; // not checked at the local level
 
-            var result = scope._datas[name];
+            var result = zone._locations[name];
             if (result)
                 return result;
 
-        } while (scope = scope._parent);
+        } while (zone = zone._parent);
 
         return null;
     };
 
-    Scope.prototype._findFromParent = function(name) {
+    Zone.prototype._findFromParent = function(name) {
 
         var parent = this._parent;
         if(!parent) return null;
@@ -951,54 +624,54 @@
 
     };
 
-    Scope.prototype._findOuter = function(name) {
+    Zone.prototype._findOuter = function(name) {
 
-        var scope = this;
+        var zone = this;
         var found = false;
         var checkValve = false;
 
         do {
 
-            if(checkValve && scope._valves && !scope._valves[name])
+            if(checkValve && zone._valves && !zone._valves[name])
                 return null; // not white-listed by a valve on the cog
 
             checkValve = true; // not checked at the local level (valves are on the bottom of cogs)
 
-            var result = scope._datas[name];
+            var result = zone._locations[name];
             if (result) {
                 if(found)
                     return result;
                 found = true;
             }
-        } while (scope = scope._parent);
+        } while (zone = zone._parent);
 
         return null;
 
     };
 
-    Scope.prototype._findLast = function(name) {
+    Zone.prototype._findLast = function(name) {
 
-        var scope = this;
+        var zone = this;
         var result = null;
         var checkValve = false;
 
         do {
 
-            if(checkValve && scope._valves && !scope._valves[name])
+            if(checkValve && zone._valves && !zone._valves[name])
                 return null; // not white-listed by a valve
 
             checkValve = true; // not checked at the local level
 
-            result = scope._datas[name] || result;
+            result = zone._locations[name] || result;
 
-        } while (scope = scope._parent);
+        } while (zone = zone._parent);
 
         return result;
 
     };
 
-    var Cluster = function(topic, data) {
-        this._data = data;
+    var Cluster = function(topic, location) {
+        this._location = location;
         this._topic = topic;
         this._sensors = [];
         this._lastEnvelope = null;
@@ -1014,7 +687,7 @@
             sensor.drop();
         }
 
-        this._data = null;
+        this._location = null;
         this._lastEnvelope = null;
         this._sensors = null;
 
@@ -1050,7 +723,7 @@
 
     var Sensor = function() {
 
-        this._scope = null;
+        this._zone = null;
         this._multi = null; // list of sensors to process through sensor api
         this._callback = null;
         this._context = null;
@@ -1079,7 +752,7 @@
         this._dropped = false;
         this._locked = false;
         this._optional = false; // optional data to watch
-        this._mergeLoc = null; // an autogenerated Data to hold merged data
+        this._mergeLoc = null; // an autogenerated Location to hold merged data
         this._cluster = null;
         this._delay = null;
         this._cancel = null;
@@ -1088,7 +761,7 @@
 
     };
 
-    // todo add data and sensor reset methods, use with object pooling
+    // todo add location and sensor reset methods, use with object pooling
 
     Sensor.prototype.throwError = function(msg){
         throw {error:"Catbus: Sensor", msg: msg, topic: this._getTopic(), tag: this._getTag() };
@@ -1107,12 +780,12 @@
         need: {name: 'need', transform: '_toStringArray', valid: '_isStringArray', prop: '_needs'}, // todo, also accept [locs] to tags
         gather: {name: 'gather', transform: '_toStringArray', valid: '_isStringArray', prop: '_gather'}, // todo, also accept [locs] to tags
         host:  {name: 'host', transform: '_toString', type: 'string', setter: '_setHost', prop: '_host'},
-        scope:  {name: 'scope', valid: '_isScope', setter: '_setScope', prop: '_scope'},
+        zone:  {name: 'zone', valid: '_isZone', setter: '_setZone', prop: '_zone'},
         batch: {name: 'batch', type: 'boolean' , prop: '_batch', default_set: true, setter: '_setBatch'},
         change: {name: 'change', type: 'function', prop: '_change', default_set: function(msg){ return msg;}},
         optional: {name: 'optional', type: 'boolean' , prop: '_optional', default_set: true},
         group: {name: 'group', type: 'function', prop: '_group', functor: true, default_set: function(msg, topic, name){ return name;}},
-        pipe: {name: 'pipe', valid: '_isData', prop: '_pipe'},
+        pipe: {name: 'pipe', valid: '_isLocation', prop: '_pipe'},
         emit: {name: 'emit', prop: '_emit', functor: true, default_set: function(msg, topic, name){ return topic;}},
         name: {name: 'name', type: 'string' , prop: '_name'},
         cmd: {name: 'cmd', type: 'string', prop: '_cmd'},
@@ -1197,16 +870,16 @@
     Sensor.prototype._getTag = function(){
         if(this._tag)
             return this._tag;
-        var loc = this._getData();
+        var loc = this._getLocation();
         return loc && loc.tag();
     };
 
-    Sensor.prototype._getData = function(){
-        return this._cluster && this._cluster._data;
+    Sensor.prototype._getLocation = function(){
+        return this._cluster && this._cluster._location;
     };
 
-    Sensor.prototype._isData = function(data){
-        return data instanceof Data;
+    Sensor.prototype._isLocation = function(location){
+        return location instanceof Location;
     };
 
     Sensor.prototype.toArray = function(){
@@ -1217,8 +890,8 @@
     };
 
 
-    Sensor.prototype._isScope = function(scope){ // scope can be set to null only if a sensor is already dropped
-        return (this._dropped && !scope) || scope instanceof Scope;
+    Sensor.prototype._isZone = function(zone){ // zone can be set to null only if a sensor is already dropped
+        return (this._dropped && !zone) || zone instanceof Zone;
     };
 
     Sensor.prototype._toStringArray = function(stringOrStringArray){
@@ -1388,15 +1061,15 @@
 
     };
 
-    Sensor.prototype._setScope = function(newScope){
+    Sensor.prototype._setZone = function(newZone){
 
-        var oldScope = this._scope;
-        if(oldScope)
-            delete oldScope._sensors[this._id];
-        this._scope = newScope;
+        var oldZone = this._zone;
+        if(oldZone)
+            delete oldZone._sensors[this._id];
+        this._zone = newZone;
 
-        if(newScope)
-            newScope._sensors[this._id] = this;
+        if(newZone)
+            newZone._sensors[this._id] = this;
 
         return this;
     };
@@ -1425,11 +1098,11 @@
         topic = topic || 'update';
 
         var origCluster  = this._cluster;
-        var data = origCluster._data;
+        var location = origCluster._location;
 
-        if(origCluster) // changing clusters with datas, leave the current one
+        if(origCluster) // changing clusters with locations, leave the current one
             origCluster._remove(this);
-        var newCluster = this._cluster = data._demandCluster(topic);
+        var newCluster = this._cluster = location._demandCluster(topic);
         newCluster._add(this);
         return this;
 
@@ -1512,17 +1185,17 @@
         return this;
     };
 
-    Sensor.prototype._setData = function(data){
+    Sensor.prototype._setLocation = function(location){
 
-        if(data === (this._cluster && this._cluster._data)) return this; // matches current data
+        if(location === (this._cluster && this._cluster._location)) return this; // matches current location
 
         var origCluster  = this._cluster;
         var origTopic = origCluster && origCluster._topic || 'update';
 
-        if(origCluster) // changing clusters with datas, leave the current one
+        if(origCluster) // changing clusters with locations, leave the current one
             origCluster._remove(this);
 
-        var newCluster = this._cluster = data._demandCluster(origTopic);
+        var newCluster = this._cluster = location._demandCluster(origTopic);
         newCluster._add(this);
 
         return this;
@@ -1538,7 +1211,7 @@
 
         var sensors = this._multi || [this];
 
-        var mergeLoc = this._mergeLoc = this._scope.demandData('auto:' + (catbus.uid + 1));
+        var mergeLoc = this._mergeLoc = this._zone._demandData(); // demandLocation('auto:' + (catbus.uid + 1));
 
         var mergeHost = this._host && this._host._name;
         var mergeContext = this._context;
@@ -1564,7 +1237,7 @@
         this._active = false;
 
         this.host(null);
-        this.scope(null);
+        this.zone(null);
 
         if(this._cluster) {
             this._cluster._remove(this);
@@ -1665,7 +1338,7 @@
         // todo this is stupid not performant -- fix to one time lookup
 
         var consolidated = {};
-        var scope = this._scope;
+        var zone = this._zone;
 
 
         var optional = this._optional; //todo add optional to sensor
@@ -1673,7 +1346,7 @@
         for(var i = 0; i < this._gather.length; i++){
             var name = this._gather[i];
 
-            var data = scope._findData(name, 'first', optional);
+            var data = zone._findData(name, 'first', optional);
             if(data){
                 consolidated[name] = data.read();
             }
@@ -1779,18 +1452,21 @@
     };
 
 
-    var Data = function(name, dimension, ephemeral) {
+    var Location = function(name) {
 
-        this._facade = false; //
-        this._dimension = dimension || 'data';
-        this._ephemeral = !!ephemeral;
-        this._multi = null; // list of datas to put through api
+        this._tree = null; // root zone of tree
+        this._multi = null; // list of locations to put through api
         this._id = ++catbus.uid;
+        this._hasData = false; // true after the first write
         this._name = name || ('auto:' + this._id);
         this._tag = name; // default
         this._clusters = {}; // by topic
-        this._scope = null; // origin
-        this._demandCluster('*'); // wildcard storage data for all topics
+        this._appear = undefined;
+        this._zone = null;
+        this._service = null;
+        this._routeKey = '';
+        this._methodMap = {};
+        this._demandCluster('*'); // wildcard storage location for all topics
         this._demandCluster('update'); // default for data storage
         this._dropped = false;
 
@@ -1799,7 +1475,7 @@
 
 
 
-    Data.prototype.drop = Data.prototype.destroy = function(){
+    Location.prototype.drop = Location.prototype.destroy = function(){
 
         if(this._dropped) return;
 
@@ -1812,23 +1488,23 @@
 
     };
 
-    Data.prototype.tag = function(tag){
+    Location.prototype.tag = function(tag){
         if(arguments.length === 0) return this._tag;
         this._tag = tag;
         return this;
     };
 
-    Data.prototype.name = function(){
+    Location.prototype.name = function(){
         return this._name || null;
     };
 
 
-    Data.prototype.createSensor = Data.prototype.on = Data.prototype.sensor = function(topicOrTopics){
+    Location.prototype.createSensor = Location.prototype.on = Location.prototype.sensor = function(topicOrTopics){
 
         var topic_list;
         var loc_list;
         var sensor_list;
-        var data;
+        var location;
         var topic;
         var sensor;
 
@@ -1837,9 +1513,9 @@
         loc_list = this._multi || [this];
 
         if(loc_list.length === 1 && topic_list.length === 1){
-            data = loc_list[0];
+            location = loc_list[0];
             topic = topic_list[0];
-            sensor = data._createSensor().on(topic);
+            sensor = location._createSensor().on(topic);
             return sensor;
         }
 
@@ -1848,10 +1524,10 @@
         sensor_list = sensor._multi = [];
 
         for(var i = 0; i < loc_list.length; i++){
-            data = loc_list[i];
+            location = loc_list[i];
             for(var j = 0; j < topic_list.length; j++){
                 topic = topic_list[j];
-                sensor_list.push(data._createSensor().on(topic));
+                sensor_list.push(location._createSensor().on(topic));
             }
         }
 
@@ -1859,25 +1535,25 @@
 
     };
 
-    Data.prototype._createSensor = function(){
+    Location.prototype._createSensor = function(){
         var sensor = new Sensor();
-        sensor.scope(this._scope);
-        sensor._setData(this);
+        sensor.zone(this._zone);
+        sensor._setLocation(this);
         return sensor;
     };
 
-    Data.prototype._findCluster = function(topic){
+    Location.prototype._findCluster = function(topic){
         return this._clusters[topic];
     };
 
-    Data.prototype._demandCluster = function(topic){
+    Location.prototype._demandCluster = function(topic){
         if(typeof topic !== 'string'){
             throw new Error("Topic is not a string");
         }
         return this._findCluster(topic) || (this._clusters[topic] = new Cluster(topic, this));
     };
 
-    Data.prototype.peek = function(topic){
+    Location.prototype.peek = function(topic){
         if(arguments.length == 0)
             topic = 'update';
         var cluster = this._findCluster(topic);
@@ -1888,14 +1564,14 @@
     };
 
     // todo split internal data write vs public external to monitor 'fire' -- also add auto/fire check
-    Data.prototype.read = Data.prototype.look = function(topic) {
+    Location.prototype.read = Location.prototype.look = function(topic) {
         topic = topic || 'update';
         var packet = this.peek(topic);
         return (packet) ? packet.msg : undefined;
     };
 
 
-    Data.prototype.write = function(msg, topic, tag){
+    Location.prototype.write = function(msg, topic, tag, fire){
 
         topic = topic || 'update';
         tag = tag || this.tag();
@@ -1910,11 +1586,11 @@
         }
     };
 
-    Data.prototype.refresh = function(topic, tag){
+    Location.prototype.refresh = function(topic, tag){
         this.write(this.read(topic),topic, tag, true);
     };
 
-    Data.prototype.toggle = function(topic, tag){
+    Location.prototype.toggle = function(topic, tag){
         this.write(!this.read(topic),topic, tag, true);
     };
 

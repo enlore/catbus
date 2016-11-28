@@ -1,5 +1,5 @@
 /**
- * catbus.js (v4.0.0) --
+ * catbus.js (v3.0.0) --
  *
  * Copyright (c) 2016 Scott Southworth, Landon Barnickle, Nick Lorenson & Contributors
  *
@@ -217,6 +217,7 @@
 
 
     function createFunctor(val) {
+        //if(val === undefined) return undefined;
         return (typeof val === 'function') ? val : function() { return val; };
     }
 
@@ -229,7 +230,7 @@
         return arg;
 
     }
-
+    
     function stringToTrimmedArray(str, delimiter){
 
         delimiter = delimiter || ',';
@@ -252,7 +253,7 @@
     catbus._primed = false;
     catbus._queueFrame = [];
     catbus._defaultScope = null;
-
+    
     catbus.dropHost = function(name){
 
         var hosts = catbus._hosts;
@@ -318,366 +319,13 @@
     };
 
 
-
-    var TRANSFORM_METHOD = 'transformMethod';
-    var TOPIC_METHOD = 'topicMethod';
-    var SOURCE_METHOD = 'sourceMethod';
-    var DELAY_METHOD = 'delayMethod';
-    var FILTER_METHOD = 'filterMethod';
-    var GROUP_METHOD = 'groupMethod';
-    var KEEP_METHOD = 'keepMethod';
-    var KEEP_COUNT = 'keepCount';
-    var RETAIN_METHOD = 'retainMethod';
-
-    var TRUE_FUNC = function(){ return true;};
-    var FALSE_FUNC = function(){ return false;};
-    var TO_SOURCE_FUNC = function(msg, topic, source){ return source;};
-    var TO_MSG_FUNC = function(msg, topic, source){ return msg;};
-    var TO_TOPIC_FUNC = function(msg, topic, source){ return topic;};
-
-    var KEEP_LAST = function(messages, n){
-        if(n)
-            return message.splice(-n);
-        return messages[messages.length - 1]
-    };
-    var KEEP_FIRST = function(messages, n){
-        if(n)
-            return message.splice(0, n);
-        return messages[0]
-    };
-
-    var KEEP_ALL = function(messages){ return messages; };
-
-
-
-    var Frame = function(sensor, prevFrame){
-
-        this.sensor = sensor;
-        this.prevFrame = prevFrame || null;
-        this.nextFrame = null;
-        this.streams = [];
-
-    };
-
-    Frame.prototype.transform = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.transform requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(TRANSFORM_METHOD, method);
-
-    };
-
-    Frame.prototype.topic = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.topic requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(TOPIC_METHOD, method);
-
-    };
-
-    Frame.prototype.source = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.source requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(SOURCE_METHOD, method);
-
-    };
-
-    Frame.prototype.delay = function(method){
-
-        if(arguments.length === 0)
-            throw new Error('Sensor.frame.delay requires one argument.');
-
-        method = createFunctor(method);
-
-        return this.addFrame(DELAY_METHOD, method);
-
-    };
-
-    Frame.prototype.filter = function(method){
-
-        if(arguments.length === 0 || typeof method !== 'function')
-            throw new Error('Sensor.frame.filter requires one function argument.');
-
-        return this.addFrame(FILTER_METHOD, method);
-
-    };
-
-    Frame.prototype.group = function(method){
-
-        method = arguments.length === 1 ? createFunctor(method) : TO_SOURCE_FUNC;
-
-        var nextFrame = this.addFrame(GROUP_METHOD, method);
-        nextFrame.modifyFrame(KEEP_METHOD, KEEP_LAST);
-
-        return nextFrame;
-
-    };
-
-    Frame.prototype.retain = function(method){
-
-        method = arguments.length === 0 ? TRUE_FUNC : method;
-
-        if(typeof method !== 'function')
-            throw new Error('Sensor.frame.retain accepts only a function as an optional argument.');
-
-
-        return this.modifyFrame(RETAIN_METHOD, method);
-
-    };
-
-    Frame.prototype.last = function(n){
-
-        n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_LAST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
-
-    };
-
-    Frame.prototype.first = function(n){
-
-        n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_FIRST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
-
-    };
-
-
-    Frame.prototype.all = function(){
-
-        return this.modifyFrame(KEEP_METHOD, KEEP_ALL);
-
-    };
-
-
-
-    // create a new frame with matching empty streams fed by the current frame
-
-    Frame.prototype.addFrame = function(prop, val){
-
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
-        var streams = this.streams;
-        var len = streams.length;
-        var destStreams = nextFrame.streams;
-
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            var destStream = new Stream(nextFrame);
-            destStream[prop] = val;
-            stream.nextStream = destStream;
-            destStreams.push(destStream);
-
-        }
-
-        return nextFrame;
-
-    };
-
-    Frame.prototype.modifyFrame = function(prop, val){
-
-
-        var streams = this.streams;
-        var len = streams.length;
-
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            stream[prop] = val;
-
-        }
-
-        return this;
-
-    };
-
-
-    // create a new frame with one stream fed by all streams of the current frame
-
-    Frame.prototype.mergeFrame = function(){
-
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
-        var streams = this.streams;
-        var destStream = new Stream(nextFrame);
-        nextFrame.streams.push(destStream);
-
-        for(var i = 0; i < streams; i++){
-
-            var origStream = streams[i];
-            origStream.nextStream = destStream;
-
-        }
-
-        return nextFrame;
-
-    };
-
-
-    var Stream = function(frame){
-
-        this.frame = frame;
-        this.dead = false;
-        this.nextStream = null;
-        this.lastPacket = null;
-        this.name = null;
-        this.topic = null;
-
-        this.messages = [];
-        this.messagesByKey = {};
-        this.keepMethod = KEEP_LAST;
-        this.keepCount = 0; // non-zero creates an array
-        this.groupMethod = null;
-        this.transformMethod = null;
-        this.filterMethod = null;
-        this.topicMethod = null;
-        this.sourceMethod = null;
-        this.delayMethod = null;
-
-        this.readyMethod = null;
-        this.retainMethod = null;
-        this.schedule = null; // throttle, debounce, defer, batch
-
-        this.primed = false;
-
-    };
-
-
-    // timer new -- group
-    // last of a stream, then merge, then group, retain (mix transform), last
-
-
-    Stream.prototype.tell = function(msg, topic, source) {
-
-        if(this.dead) // true if canceled or disposed midstream
-            return this;
-
-        var last = this.lastPacket;
-
-        if(this.filterMethod && !this.filterMethod(msg, topic, source, last))
-            return;
-
-        if(this.groupMethod) {
-            this.tellGroup(msg, topic, source, last);
-        } else if (this.schedule) {
-            this.tellHold(msg, topic, source, last);
-        } else if (this.delayMethod) {
-            this.tellDelay(msg, topic, source);
-        } else {
-            this.tellSync(msg, topic, source, last);
-        }
-
-        return this;
-
-    };
-
-    Stream.prototype.tellDelay = function(msg, topic, source) {
-
-        var nextStream = this.nextStream;
-        setTimeout(nextStream.tell.bind(nextStream), this.delayMethod() || 0, msg, topic, source);
-
-    };
-
-    Stream.prototype.tellSync = function(msg, topic, source, last) {
-
-        msg = this.transformMethod ? this.transformMethod(msg, topic, source, last) : msg;
-        topic = this.topicMethod ? this.topicMethod(msg, topic, source, last) : topic;
-        source = this.sourceMethod ? this.sourceMethod(msg, topic, source, last) : source;
-
-        var nextStream = this.nextStream;
-
-        this.lastPacket = new Packet(msg, topic, source);
-
-        if (nextStream) {
-                nextStream.tell(msg, topic, source);
-        }
-
-    };
-
-
-    Stream.prototype.tellGroup = function(msg, topic, source, last) {
-
-        var retain = this.retainMethod(msg, topic, source, last);
-        var groupName = this.groupMethod(msg, topic, source, last);
-
-        var messages = this.messagesByKey[groupName] = this.messagesByKey[groupName] || [];
-        messages.push(msg);
-
-        this.primed = this.primed || this.readyMethod(this.messages, this.messagesByKey, last);
-
-        // if this ready, call schedule func, back to tellGroupForward
-    };
-
-    Stream.prototype.tellHold = function(msg, topic, source, last) {
-
-
-
-
-    };
-
-    Holder.prototype.resolveContent = function() {
-
-        var content = this._by === undefined ? this.resolveListContent() : this.resolveGroupedContent();
-
-
-    };
-
-    Holder.prototype.resolveListContent = function() {
-
-        var keep = this._keep;
-        var messages = this._messages;
-
-        if(keep === KEEP_FIRST)
-            return messages[0];
-
-        if(keep === KEEP_LAST)
-            return messages[messages.length - 1];
-
-
-        return messages;
-
-    };
-
-    Holder.prototype.resolveGroupedContent = function() {
-
-        var content = {};
-        for(var name in this._groups){
-            var holder = this._groups[name];
-            content[name] = holder.resolveContent();
-        }
-
-        return content;
-
-    };
-
-    // mustSee, hasSeen, mustCount,
-
-    Holder.prototype.needs = function(arrOrFunc){
-
-        // array of content hash or func on content
-
-    };
-
-    Holder.prototype.isReady = function(){
-
-    };
-
-    var Packet = function(msg, topic, source){
+    var Envelope = function(msg, topic, tag){
 
         this.msg = msg;
-        this.topic = topic || 'update';
-        this.source = source;
-        this.timestamp = Date.now();
+        this.topic = topic;
+        this.tag = tag;
+        this.id = ++catbus.uid;
+        this.sent = Date.now();
 
     };
 
