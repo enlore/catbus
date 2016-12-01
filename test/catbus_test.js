@@ -48,81 +48,34 @@ var _reset = function(){
 
 };
 
-castle = bus.demandData('castle');
-valley  = bus.demandData('valley');
-airship  = bus.demandData('airship');
+var root = bus.createScope();
+
+castle = root.demandData('castle');
+valley  = root.demandData('valley');
+airship  = root.demandData('airship');
 
 
 
 describe('Catbus', function(){
 
     before(function(){
-        tree = bus.demandData('tree');
-        boat = bus.demandData('boat').tag('Ponyo');
-        lands = bus.demandData(['tree','boat','desert']);
+        tree = root.demandData('tree');
     });
 
     describe('Scopes', function(){
 
 
-        it('makes and finds trees', function(){
-
-            var fruitTree = bus.demandScope('fruit');
-            var catsTree = bus.demandScope('cats');
-
-            assert.equal(fruitTree === bus.demandScope('fruit'), true);
-            assert.equal(catsTree === bus.demandScope('cats'), true);
-
-        });
-
-        it('makes child scopes', function(){
-
-            var fruitTree = bus.demandScope('fruit');
-
-            var sour = fruitTree.demandChild('sour');
-            var sweet = fruitTree.demandChild('sweet');
-            var tart = fruitTree.demandChild('tart');
-
-            assert.equal(sour === fruitTree.demandChild('sour'), true);
-            assert.equal(fruitTree.snapshot().children.length, 3);
-
-        });
-
-        it('makes child of child scopes', function(){
-
-            var fruitTree = bus.demandScope('fruit');
-
-            var sour = fruitTree.demandChild('sour');
-            var sweet = fruitTree.demandChild('sweet');
-            var tart = fruitTree.demandChild('tart');
-
-            sour.demandChild('lemon');
-            sour.demandChild('lime');
-
-            sweet.demandChild('orange');
-            sweet.demandChild('peach');
-            sweet.demandChild('apple');
-            sweet.demandChild('mango');
-
-            tart.demandChild('apple');
-
-
-            assert.equal(fruitTree.snapshot().children.length, 3);
-            assert.equal(sweet.snapshot().children.length, 4);
-
-        });
-
 
         it('finds data up the tree', function(){
 
-            var fruitTree = bus.demandScope('fruit');
+            var fruitTree = root.createChild('fruit');
             fruitTree.demandData('owner').write('Scott');
 
-            var sour = fruitTree.demandChild('sour');
-            var sweet = fruitTree.demandChild('sweet');
-            var tart = fruitTree.demandChild('tart');
+            var sour = fruitTree.createChild('sour');
+            var sweet = fruitTree.createChild('sweet');
+            var tart = fruitTree.createChild('tart');
 
-            var mango = sweet.demandChild('mango');
+            var mango = sweet.createChild('mango');
             mango.demandData('owner').write('Landon');
 
             var owner = sour.findData('owner').read(); // owner at fruit level

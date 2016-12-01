@@ -204,85 +204,26 @@
     }
 
 
-    var catbus = {};
+    var Catbus = {};
     var externalContext = this;
 
-    catbus.$ = {};
-
-    var plugins = typeof seele !== 'undefined' && seele;
-    if(plugins)
-        plugins.register('catbus', catbus, true);
-    else
-        externalContext.Catbus = catbus;
-
+    
 
     function createFunctor(val) {
         return (typeof val === 'function') ? val : function() { return val; };
     }
 
-    function toNameArray(arg, delimiter){
 
-        if(typeof arg === 'string'){
-            return stringToTrimmedArray(arg, delimiter);
-        }
+    Catbus.uid = 0;
+    Catbus.primed = false;
+    Catbus.queueFrame = [];
+    Catbus.defaultScope = new Scope('ROOT');
 
-        return arg;
-
-    }
-
-    function stringToTrimmedArray(str, delimiter){
-
-        delimiter = delimiter || ',';
-        var arr = str.split(delimiter);
-        var result = [];
-        for(var i = 0; i < arr.length; i++){
-            var chunk = arr[i];
-            var trimmed_chunk = chunk.trim();
-            if(trimmed_chunk)
-                result.push(trimmed_chunk);
-        }
-
-        return result;
-    }
-
-
-    catbus.uid = 0;
-    catbus._datas = {};
-    catbus._hosts = {}; // hosts by name
-    catbus._primed = false;
-    catbus._queueFrame = [];
-    catbus._defaultScope = null;
-
-    catbus.dropHost = function(name){
-
-        var hosts = catbus._hosts;
-        var host = hosts[name];
-
-        if(!host) return false;
-
-        for(var id in host._sensorMap){
-            var sensor = host._sensorMap[id];
-            sensor.drop();
-        }
-
-        delete hosts[name];
+    Catbus.createScope = function(name){
+        return Catbus.defaultScope.createChild(name);
     };
 
-    catbus.demandPlace = catbus.demandScope = function(name){
-        var root = catbus._defaultScope = catbus._defaultScope || new Scope();
-        return root.demandChild(name);
-    };
-
-    catbus.demandData = catbus.data = function(nameOrNames){
-        var scope = catbus._defaultScope = catbus._defaultScope || new Scope();
-        return scope.demandData(nameOrNames);
-    };
-
-    catbus.envelope = function(msg, topic, tag){
-        return new Envelope(msg, topic, tag);
-    };
-
-    catbus.queue = function(sensor) {
+    Catbus.queue = function(sensor) {
 
         var arr = this._queueFrame;
         arr.push(sensor);
@@ -296,7 +237,7 @@
     };
 
 
-    catbus.flush = function(){
+    Catbus.flush = function(){
 
         this._primed = false;
 
@@ -318,6 +259,14 @@
     };
 
 
+    var TELL_METHOD = 'tellMethod';
+
+
+    var TELL_HOLD = 'tellHold';
+    var TELL_GROUP = 'tellGroup';
+    var TELL_DELAY = 'tellDelay';
+    var TELL_PASS = 'tellPass';
+    var TELL_FILTER = 'tellFilter';
 
     var TRANSFORM_METHOD = 'transformMethod';
     var TOPIC_METHOD = 'topicMethod';
@@ -327,7 +276,64 @@
     var GROUP_METHOD = 'groupMethod';
     var KEEP_METHOD = 'keepMethod';
     var KEEP_COUNT = 'keepCount';
-    var RETAIN_METHOD = 'retainMethod';
+    var TIMER_METHOD = 'timerMethod';
+    var CALLBACK_METHOD = 'callbackMethod';
+    var MESSAGES_BY_KEY = 'messagesByKey';
+    var MESSAGES = 'messages';
+
+    var batchQueue = []; // for all batching
+
+    var processBatchQueue = function(){
+
+        var cycles = 0;
+
+        var q = batchQueue;
+        batchQueue = [];
+
+        while(q.length) {
+
+            while (q.length) {
+                var stream = q.shift();
+                stream.fireContent();
+            }
+
+            q = batchQueue;
+            batchQueue = [];
+
+            cycles++;
+            if(cycles > 10)
+                throw new Error('Batch cycling loop > 10.', q);
+
+        }
+
+    };
+
+
+    var BATCH_TIMER =  function(){
+        batchQueue.push(this);
+    };
+
+    var DEFER_TIMER = function(){
+        setTimeout(this.fireContent, 0);
+    };
+
+    var SKIP_DUPES_FILTER = function(msg, topic, source, last){
+        return msg !== (last && last.msg);
+    };
+
+    var CLEAR_ALL = function(){
+        if(this.groupMethod)
+            this.messagesByKey = {};
+        else
+            this.messages = [];
+    };
+
+    var CLEAR_GROUP = function(){
+        var messagesByKey = this.messagesByKey;
+        for(var k in messagesByKey){
+            messagesByKey[k] = [];
+        }
+    };
 
     var TRUE_FUNC = function(){ return true;};
     var FALSE_FUNC = function(){ return false;};
@@ -337,12 +343,12 @@
 
     var KEEP_LAST = function(messages, n){
         if(n)
-            return message.splice(-n);
+            return messages.splice(-n);
         return messages[messages.length - 1]
     };
     var KEEP_FIRST = function(messages, n){
         if(n)
-            return message.splice(0, n);
+            return messages.splice(0, n);
         return messages[0]
     };
 
@@ -350,12 +356,27 @@
 
 
 
-    var Frame = function(sensor, prevFrame){
+    var Frame = function(prevFrame){
 
-        this.sensor = sensor;
+        this.sensor = null;
         this.prevFrame = prevFrame || null;
         this.nextFrame = null;
         this.streams = [];
+        this.keepSpecified = false;
+        this.groupSpecified = false;
+        this.timerSpecified = false;
+        this.nothingSpecified = true;
+
+    };
+
+    // to begin changing the behavior of an existing frame without frame methods adding new frames
+
+    Frame.prototype.fix = function(){
+
+        this.keepSpecified = false;
+        this.groupSpecified = false;
+        this.timerSpecified = false;
+        this.nothingSpecified = true;
 
     };
 
@@ -366,9 +387,12 @@
 
         method = createFunctor(method);
 
-        return this.addFrame(TRANSFORM_METHOD, method);
+        var frame = this.addFrame();
+        frame.modifyFrame(TRANSFORM_METHOD, method);
+        return frame;
 
     };
+
 
     Frame.prototype.topic = function(method){
 
@@ -377,7 +401,17 @@
 
         method = createFunctor(method);
 
-        return this.addFrame(TOPIC_METHOD, method);
+        var frame = this.addFrame();
+        frame.modifyFrame(TOPIC_METHOD, method);
+        return frame;
+
+    };
+
+    Frame.prototype.toTopic = function(){
+
+        var frame = this.addFrame();
+        frame.modifyFrame(TOPIC_METHOD, TO_TOPIC_FUNC);
+        return frame;
 
     };
 
@@ -397,9 +431,30 @@
         if(arguments.length === 0)
             throw new Error('Sensor.frame.delay requires one argument.');
 
+        var frame = this.timerSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.timerSpecified = true;
+        frame.nothingSpecified = false;
+
         method = createFunctor(method);
 
-        return this.addFrame(DELAY_METHOD, method);
+        frame.modifyFrame(DELAY_METHOD, method);
+        frame.modifyFrame(TELL_METHOD, TELL_DELAY);
+        return frame;
+
+    };
+
+    Frame.prototype.throttle = function(options){
+
+        if(arguments.length === 0)
+            throw new Error('Sensor.frame.delay requires an options argument.');
+
+        var frame = this.timerSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.timerSpecified = true;
+        frame.nothingSpecified = false;
+
+        frame.modifyFrame(DELAY_METHOD, method);
+        frame.modifyFrame(TELL_METHOD, TELL_DELAY);
+        return frame;
 
     };
 
@@ -408,7 +463,16 @@
         if(arguments.length === 0 || typeof method !== 'function')
             throw new Error('Sensor.frame.filter requires one function argument.');
 
-        return this.addFrame(FILTER_METHOD, method);
+        var frame = this.addFrame();
+        frame.modifyFrame(FILTER_METHOD, method);
+        frame.modifyFrame(TELL_METHOD, TELL_FILTER);
+
+        return frame;
+    };
+
+    Frame.prototype.skipDupes = function(){
+
+        return this.addFrame(FILTER_METHOD, SKIP_DUPES_FILTER);
 
     };
 
@@ -416,57 +480,92 @@
 
         method = arguments.length === 1 ? createFunctor(method) : TO_SOURCE_FUNC;
 
-        var nextFrame = this.addFrame(GROUP_METHOD, method);
-        nextFrame.modifyFrame(KEEP_METHOD, KEEP_LAST);
+        var frame = this.groupSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.groupSpecified = true;
+        frame.nothingSpecified = false;
 
-        return nextFrame;
+        frame.modifyFrame(TELL_METHOD, TELL_GROUP);
+        frame.modifyFrame(GROUP_METHOD, method);
+        frame.modifyFrame(KEEP_METHOD, KEEP_LAST);
+        frame.modifyFrame(MESSAGES_BY_KEY, {});
 
-    };
-
-    Frame.prototype.retain = function(method){
-
-        method = arguments.length === 0 ? TRUE_FUNC : method;
-
-        if(typeof method !== 'function')
-            throw new Error('Sensor.frame.retain accepts only a function as an optional argument.');
-
-
-        return this.modifyFrame(RETAIN_METHOD, method);
+        return frame;
 
     };
+
 
     Frame.prototype.last = function(n){
 
+        var frame = this.keepSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.keepSpecified = true;
+        frame.nothingSpecified = false;
+
         n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_LAST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
+        frame.modifyFrame(KEEP_METHOD, KEEP_LAST);
+        frame.modifyFrame(KEEP_COUNT, n);
+        frame.modifyFrame(TELL_METHOD, TELL_HOLD);
+
+        return frame;
 
     };
 
     Frame.prototype.first = function(n){
 
+        var frame = this.keepSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.keepSpecified = true;
+        frame.nothingSpecified = false;
+
         n = Number(n) || 0;
-        this.modifyFrame(KEEP_METHOD, KEEP_FIRST);
-        this.modifyFrame(KEEP_COUNT, n);
-        return this;
+        frame.modifyFrame(KEEP_METHOD, KEEP_FIRST);
+        frame.modifyFrame(KEEP_COUNT, n);
+
+        return frame;
 
     };
 
 
     Frame.prototype.all = function(){
 
-        return this.modifyFrame(KEEP_METHOD, KEEP_ALL);
+        var frame = this.keepSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.keepSpecified = true;
+        frame.nothingSpecified = false;
+
+        frame.modifyFrame(KEEP_METHOD, KEEP_ALL);
+
+        return frame;
+
+    };
+
+    Frame.prototype.batch = function(){
+
+        var frame = this.timerSpecified || this.nothingSpecified ? this.addFrame() : this;
+        frame.timerSpecified = true;
+        frame.nothingSpecified = false;
+
+        frame.modifyFrame(TIMER_METHOD, BATCH_TIMER);
+
+        return frame;
+
+    };
+
+    Frame.prototype.ready = function(method){
+
+        if(arguments.length === 0 || typeof method !== 'function')
+            throw new Error('Sensor.frame.ready requires one function argument.');
+
+        if(!this.scheduleMethod)
+            throw new Error('Sensor.frame.ready requires a schedule (batch, defer, throttle, delay)');
+
+        return this.modifyFrame(READY_METHOD, method);
 
     };
 
 
-
     // create a new frame with matching empty streams fed by the current frame
 
-    Frame.prototype.addFrame = function(prop, val){
+    Frame.prototype.addFrame = function(){
 
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
+        var nextFrame = this.nextFrame = new Frame(this);
         var streams = this.streams;
         var len = streams.length;
         var destStreams = nextFrame.streams;
@@ -474,8 +573,7 @@
         for(var i = 0; i < len; i++){
 
             var stream = streams[i];
-            var destStream = new Stream(nextFrame);
-            destStream[prop] = val;
+            var destStream = new Stream();
             stream.nextStream = destStream;
             destStreams.push(destStream);
 
@@ -507,9 +605,9 @@
 
     Frame.prototype.mergeFrame = function(){
 
-        var nextFrame = this.nextFrame = new Frame(this.sensor, this);
+        var nextFrame = this.nextFrame = new Frame(this);
         var streams = this.streams;
-        var destStream = new Stream(nextFrame);
+        var destStream = new Stream();
         nextFrame.streams.push(destStream);
 
         for(var i = 0; i < streams; i++){
@@ -524,18 +622,19 @@
     };
 
 
-    var Stream = function(frame){
+    var Stream = function(){
 
-        this.frame = frame;
         this.dead = false;
         this.nextStream = null;
         this.lastPacket = null;
         this.name = null;
         this.topic = null;
 
-        this.messages = [];
-        this.messagesByKey = {};
-        this.keepMethod = KEEP_LAST;
+        this.messages = null; // [] with hold
+        this.messagesByKey = null; // {} with group
+
+        this.tellMethod = TELL_PASS; // default
+        this.keepMethod = KEEP_LAST; // default if holding or grouping
         this.keepCount = 0; // non-zero creates an array
         this.groupMethod = null;
         this.transformMethod = null;
@@ -545,16 +644,13 @@
         this.delayMethod = null;
 
         this.readyMethod = null;
-        this.retainMethod = null;
-        this.schedule = null; // throttle, debounce, defer, batch
+        this.clearMethod = null; // return true/false for latched
+        this.latched = false; // from this.clearMethod()
+        this.timerMethod = null; // throttle, debounce, defer, batch
 
         this.primed = false;
 
     };
-
-
-    // timer new -- group
-    // last of a stream, then merge, then group, retain (mix transform), last
 
 
     Stream.prototype.tell = function(msg, topic, source) {
@@ -562,115 +658,152 @@
         if(this.dead) // true if canceled or disposed midstream
             return this;
 
+        topic = topic || 'update';
         var last = this.lastPacket;
 
-        if(this.filterMethod && !this.filterMethod(msg, topic, source, last))
-            return;
-
-        if(this.groupMethod) {
-            this.tellGroup(msg, topic, source, last);
-        } else if (this.schedule) {
-            this.tellHold(msg, topic, source, last);
-        } else if (this.delayMethod) {
-            this.tellDelay(msg, topic, source);
-        } else {
-            this.tellSync(msg, topic, source, last);
-        }
+        // tell method = tellDelay, tellGroup, tellHold, tellTransform, tellFilter
+        var tellMethod = this[this.tellMethod];
+        tellMethod.call(this, msg, topic, source, last);
 
         return this;
 
     };
 
+
+    Stream.prototype.tellNext = function(msg, topic, source, thisStream){
+
+        thisStream = thisStream || this; // allow callbacks with context instead of bind (massively faster)
+        var nextStream = thisStream.nextStream;
+
+        thisStream.lastPacket = new Packet(msg, topic, source);
+
+        if (nextStream) {
+            nextStream.tell(msg, topic, source);
+        }
+
+    };
+
+    Stream.prototype.tellFilter = function(msg, topic, source) {
+
+        if(this.filterMethod && !this.filterMethod(msg, topic, source, this.lastPacket))
+            return;
+
+        this.tellNext(msg, topic, source);
+
+    };
+
     Stream.prototype.tellDelay = function(msg, topic, source) {
+
+        // passes nextStream as 'this' to avoid bind slowdown
+        setTimeout(this.tell, this.delayMethod() || 0, msg, topic, source, this.nextStream);
+
+    };
+
+    Stream.prototype.tellBatch = function(msg, topic, source) {
+
+        // passes nextStream as 'this' to avoid bind slowdown
+        setTimeout(this.tell, this.delayMethod() || 0, msg, topic, source, this.nextStream);
+
+    };
+
+    Stream.prototype.tellThrottle = function(msg, topic, source) {
 
         var nextStream = this.nextStream;
         setTimeout(nextStream.tell.bind(nextStream), this.delayMethod() || 0, msg, topic, source);
 
     };
 
-    Stream.prototype.tellSync = function(msg, topic, source, last) {
+    Stream.prototype.tellDebounce = function(msg, topic, source) {
+
+        var nextStream = this.nextStream;
+        setTimeout(nextStream.tell.bind(nextStream), this.delayMethod() || 0, msg, topic, source);
+
+    };
+
+    Stream.prototype.tellDebounce = function(msg, topic, source) {
+
+        var nextStream = this.nextStream;
+        setTimeout(nextStream.tell.bind(nextStream), this.delayMethod() || 0, msg, topic, source);
+
+    };
+
+
+    Stream.prototype.tellPass = function(msg, topic, source, last) {
 
         msg = this.transformMethod ? this.transformMethod(msg, topic, source, last) : msg;
         topic = this.topicMethod ? this.topicMethod(msg, topic, source, last) : topic;
         source = this.sourceMethod ? this.sourceMethod(msg, topic, source, last) : source;
 
-        var nextStream = this.nextStream;
-
-        this.lastPacket = new Packet(msg, topic, source);
-
-        if (nextStream) {
-                nextStream.tell(msg, topic, source);
-        }
+        this.tellNext(msg, topic, source);
 
     };
 
 
     Stream.prototype.tellGroup = function(msg, topic, source, last) {
 
-        var retain = this.retainMethod(msg, topic, source, last);
         var groupName = this.groupMethod(msg, topic, source, last);
 
         var messages = this.messagesByKey[groupName] = this.messagesByKey[groupName] || [];
         messages.push(msg);
 
-        this.primed = this.primed || this.readyMethod(this.messages, this.messagesByKey, last);
+        if(!this.primed && (this.latched || this.readyMethod(this.messagesByKey, last))) {
+            if(this.timerMethod) {
+                this.primed = true;
+                this.timerMethod(); // should call back this.fireContent
+            } else {
+                this.fireContent();
+            }
+        }
 
-        // if this ready, call schedule func, back to tellGroupForward
     };
 
     Stream.prototype.tellHold = function(msg, topic, source, last) {
 
+        var messages = this.messages = this.messages || [];
+        messages.push(msg);
 
-
-
-    };
-
-    Holder.prototype.resolveContent = function() {
-
-        var content = this._by === undefined ? this.resolveListContent() : this.resolveGroupedContent();
-
-
-    };
-
-    Holder.prototype.resolveListContent = function() {
-
-        var keep = this._keep;
-        var messages = this._messages;
-
-        if(keep === KEEP_FIRST)
-            return messages[0];
-
-        if(keep === KEEP_LAST)
-            return messages[messages.length - 1];
-
-
-        return messages;
-
-    };
-
-    Holder.prototype.resolveGroupedContent = function() {
-
-        var content = {};
-        for(var name in this._groups){
-            var holder = this._groups[name];
-            content[name] = holder.resolveContent();
+        if(!this.primed && (this.latched || this.readyMethod(this.messages, last))) {
+            if(this.timerMethod) {
+                this.primed = true;
+                this.timerMethod(); // should call back this.fireContent
+            } else {
+                this.fireContent();
+            }
         }
 
-        return content;
+    };
+
+    Stream.prototype.fireContent = function() {
+
+        var msg = this.groupMethod ? this.resolveGroupContent() : this.resolveHoldContent();
+
+        this.latched = this.clearMethod(); // might be noop, might hold latch
+        this.primed = false;
+
+        this.lastPacket = new Packet(msg);
+
+        var nextStream = this.nextStream;
+        if(nextStream)
+            nextStream.tell(msg);
 
     };
 
-    // mustSee, hasSeen, mustCount,
+    Stream.prototype.resolveGroupContent = function(){
 
-    Holder.prototype.needs = function(arrOrFunc){
+        var messagesByKey = this.messagesByKey;
+        for(var k in messagesByKey){
+            messagesByKey[k] = this.keepMethod(messagesByKey[k], this.keepCount);
+        }
+        return messagesByKey;
 
-        // array of content hash or func on content
+    };
+
+    Stream.prototype.resolveHoldContent = function(){
+
+        return this.messages = this.keepMethod(this.messages, this.keepCount);
 
     };
 
-    Holder.prototype.isReady = function(){
-
-    };
 
     var Packet = function(msg, topic, source){
 
@@ -682,88 +815,75 @@
     };
 
     
-    var Scope = function(name) {
+    function Scope(name) {
 
-        this._id = ++catbus.uid;
-        this._name = name || this._id;
-        this._parent = null;
-        this._children = {}; // by name
-        this._dimensions = {data: {}}; // by dimension then data name
-        this._valves = null;
-        this._sensors = {}; // by id
-        this._dropped = false;
+        this.id = ++Catbus.uid;
+        this.name = name;
+        this.parent = null;
+        this.children = [];
+        this.dimensions = {data: {}}; // by dimension then data name
+        this.valves = {}; // by dimension then data name
+        this.sensors = []; // by id
+        this.dead = false;
 
-    };
-
-    var Zone = Scope; // hack for now
+    }
 
 
-    Scope.prototype.drop = function(){
+    Scope.prototype.destroy = function(){
 
-        var i, key;
+        var i, j, key, len;
 
         if(this._dropped) return;
 
-        var child_keys = Object.keys(this._children);
-        for(i = 0; i < child_keys.length; i++){
-            key = child_keys[i];
-            var child = this._children[key];
-            child.assignParent(null);
+        var children = this.children;
+        var sensors = this.sensors;
+        var dimensions = this.dimensions;
+
+        len = children.length;
+
+        for(i = 0; i < len; i++){
+            var child = children[i];
+            child.destroy(null);
         }
 
-        var sensor_keys = Object.keys(this._sensors);
-        for(i = 0; i < sensor_keys.length; i++){
-            key = sensor_keys[i];
-            var sensor = this._sensors[key];
-            sensor.drop();
+        len = sensors.length;
+        for(i = 0; i < len; i++){
+            var sensor = sensors[i];
+            sensor.destroy();
         }
 
-        var data_keys = Object.keys(this._datas);
-        for(i = 0; i < data_keys.length; i++){
-            key = data_keys[i];
-            var data = this._datas[key];
-            data.drop(true);
+        var dimensionKeys = Object.keys(dimensions);
+        for(i = 0; i < dimensionKeys.length; i++){
+            key = dimensionKeys[i];
+            var dataByName = dimensions[key];
+            var dataKeys = Object.keys(dataByName);
+            for(j = 0; j < dataKeys.length; j++){
+                var dataName = dataKeys[j];
+                dataByName[dataName].destroy();
+            }
         }
 
 
-        this._datas = null;
-        this._sensors = null;
-        this._children = null;
-        this._valves = null;
-        this._parent = null;
-        this._dropped = true;
+        this.dimensions = null;
+        this.sensors = null;
+        this.children = null;
+        this.valves = null;
+        this.parent = null;
+        this.dead = true;
 
 
     };
 
-    Scope.prototype.snapshot = function(){
 
-        var result = {id: this._id, name: this._name, children: [], data: [], sensors: [], valves: [], parent: this._parent && this._parent._name};
-        var p;
-
-        for(p in this._children) { result.children.push(p); };
-        for(p in this._datas) { result.data.push(p); };
-        for(p in this._sensors) { result.data.push(p); };
-
-        if(this._valves)
-            for(p in this._valves) { result.children.push(p); };
-
-        return result;
-    };
-
-    Scope.prototype.demandChild = function(name){
-        return this._children[name] || this._createChild(name);
-    };
-
-    Scope.prototype._createChild = function(name, isRoute){
-        var child = new Scope(name, isRoute);
+    Scope.prototype.createChild = function(name){
+        var child = new Scope(name);
         child.assignParent(this);
         return child;
     };
 
     Scope.prototype.insertParent = function(newParent){
 
-        var oldParent = this._parent;
+        var oldParent = this.parent;
         newParent.assignParent(oldParent);
         this.assignParent(newParent);
         return this;
@@ -771,13 +891,20 @@
 
     Scope.prototype.assignParent = function(newParent){
 
-        var oldParent = this._parent;
-        if(oldParent)
-            delete oldParent._children[this._name];
-        this._parent = newParent;
+        var oldParent = this.parent;
+
+        if(oldParent === newParent)
+            return;
+
+        if(oldParent) {
+            var at = oldParent.children.indexOf(this);
+            oldParent.children.splice(at, 1);
+        }
+
+        this.parent = newParent;
 
         if(newParent) {
-            newParent._children[this._name] = this;
+            newParent.children.push(this);
         }
         
         return this;
@@ -785,51 +912,23 @@
     };
     
 
-    Scope.prototype.sensor = Scope.prototype.createSensor = function(){
+    Scope.prototype.demandDimension = function(dimension){
 
-        var sensor = new Sensor();
-        sensor.scope(this);
-        return sensor;
+        return this.dimensions[dimension] = this.dimensions[dimension] || {};
 
     };
 
-    Scope.prototype.demandData = Scope.prototype.demandData = function (nameOrNames){
-
-        var names = toNameArray(nameOrNames);
-
-        if(names.length === 1)
-            return this._demandData(names[0]);
-
-        // if an array of names, return a multi-data
-        var multiLoc = this._demandData();
-        var datas = multiLoc._multi = [];
-
-        for(var i = 0; i < names.length; i++){
-            var name = names[i];
-            datas.push(this._demandData(name));
-        }
-
-        return multiLoc;
-
-    };
-
-    Scope.prototype._demandDimension = function(dimension){
-
-        return this._dimensions[dimension] = this._dimensions[dimension] || {};
-
-    };
-
-    Scope.prototype._demandData = function(name, dimension){
+    Scope.prototype.demandData = function(name, dimension, ephemeral){
 
         dimension = dimension || 'data';
-        var datas = this._dimensions[dimension];
-        var data = datas[name];
+        var dataByName = this.demandDimension(dimension);
+        var data = dataByName[name];
 
         if(!data) {
 
-            data = new Data(name);
-            datas[data._name] = data;
-            data._scope = this;
+            data = new Data(this, name, dimension, ephemeral);
+            dataByName[name] = data;
+            data.scope = this;
 
         }
 
@@ -837,43 +936,32 @@
 
     };
 
-    Scope.prototype.findData = function(nameOrArray, where, optional){
+    Scope.prototype.findData = function(name, dimension){
 
-        var arr = toNameArray(nameOrArray);
-        var data;
-        var data_list = [];
-        var result = null;
+        var localData = this.getData(name, dimension);
+        if(localData)
+            return localData;
 
-        if(!arr)
+        var parent = this.parent;
+
+        while(parent){
+            var d = parent.getData(name, dimension);
+            if(d)
+                return d;
+            parent = parent.parent;
+        }
+
+        return null;
+
+    };
+
+
+    Scope.prototype.getData = function(name, dimension) {
+        dimension = dimension || 'data';
+        var dataByName = this.dimensions[dimension];
+        if(!dataByName)
             return null;
-
-        for(var i = 0; i < arr.length; i++){
-            var name = arr[i];
-            if(typeof name === 'object')
-                data = name;
-            else
-                data = this._findData(name, where, optional);
-            if(data)
-                data_list.push(data);
-        }
-
-        if(data_list.length > 1){
-            result = this._demandData();
-            result._multi = data_list;
-        } else if (data_list.length === 1) {
-            result = data_list[0];
-        }
-
-        return result;
-
-    };
-
-    Scope.prototype._findData = function(name) {
-            return this._findFirst(name);
-    };
-
-    Scope.prototype.getData = function(name) {
-        return this._getData(name);
+        return dataByName[name] || null;
     };
 
 
@@ -899,148 +987,74 @@
 
     };
 
-    Scope.prototype._findFirstIn = function(name, containerName) {
 
-        var scope = this;
-        var checkValve = false;
+    // subscriptions for a topic on a data element
+    var SubscriptionList = function(topic, data) {
 
-        do {
-
-            if(checkValve && scope._valves && !scope._valves[name])
-                return null; // not white-listed by a valve
-
-            checkValve = true; // not checked at the local level
-
-            if(scope._name === containerName) {
-                var result = scope._datas[name];
-                if (result)
-                    return result;
-            }
-
-        } while (scope = scope._parent);
-
-        return null;
-    };
-
-    Scope.prototype._findFirst = function(name, fromParent) {
-
-        var scope = this;
-        var checkValve = fromParent || false;
-
-        do {
-
-            if(checkValve && scope._valves && !scope._valves[name])
-                return null; // not white-listed by a valve
-
-            checkValve = true; // not checked at the local level
-
-            var result = scope._datas[name];
-            if (result)
-                return result;
-
-        } while (scope = scope._parent);
-
-        return null;
-    };
-
-    Scope.prototype._findFromParent = function(name) {
-
-        var parent = this._parent;
-        if(!parent) return null;
-        return parent._findFirst(name, true);
+        this.topic = topic;
+        this.sensors = [];
+        this.lastPacket = null;
+        this.data = data;
+        this.ephemeral = data.ephemeral;
+        this.name = data.name;
+        this.dead = false;
 
     };
 
-    Scope.prototype._findOuter = function(name) {
 
-        var scope = this;
-        var found = false;
-        var checkValve = false;
+    SubscriptionList.prototype.tell = function(msg){
 
-        do {
+        if(this.dead) return;
 
-            if(checkValve && scope._valves && !scope._valves[name])
-                return null; // not white-listed by a valve on the cog
+        var topic = this.topic;
+        var source = this.name;
+        var last = this.lastPacket;
 
-            checkValve = true; // not checked at the local level (valves are on the bottom of cogs)
+        if(!this.ephemeral)
+            this.lastPacket = new Packet(msg, topic, source);
 
-            var result = scope._datas[name];
-            if (result) {
-                if(found)
-                    return result;
-                found = true;
-            }
-        } while (scope = scope._parent);
+        var sensors = [].concat(this.sensors); // call original sensors in case subscriptions change mid loop
+        var len = sensors.length;
 
-        return null;
-
-    };
-
-    Scope.prototype._findLast = function(name) {
-
-        var scope = this;
-        var result = null;
-        var checkValve = false;
-
-        do {
-
-            if(checkValve && scope._valves && !scope._valves[name])
-                return null; // not white-listed by a valve
-
-            checkValve = true; // not checked at the local level
-
-            result = scope._datas[name] || result;
-
-        } while (scope = scope._parent);
-
-        return result;
-
-    };
-
-    var Cluster = function(topic, data) {
-        this._data = data;
-        this._topic = topic;
-        this._sensors = [];
-        this._lastEnvelope = null;
-        this._dropped = false;
-    };
-
-    Cluster.prototype._drop = function(){
-
-        if(this._dropped) return;
-
-        for(var i = 0; i < this._sensors.length; i++){
-            var sensor = this._sensors[i];
-            sensor.drop();
+        for(var i = 0; i < len; i++){
+            var s = sensors[i];
+            s.tell(msg, topic, source, last);
         }
 
-        this._data = null;
-        this._lastEnvelope = null;
-        this._sensors = null;
-
-        this._dropped = true;
-
     };
 
-    Cluster.prototype._add = function(sensor){
-        this._sensors.push(sensor);
-    };
+    SubscriptionList.prototype.destroy = function(){
 
-    Cluster.prototype._remove = function(sensor){
-        var i = this._sensors.indexOf(sensor);
-        if(i == -1) return;
-        this._sensors.splice(i,1);
-    };
+        if(this.dead) return;
 
-    Cluster.prototype._tell = function(msg, topic, tag){
-        if(this._dropped) return;
-        this._lastEnvelope = catbus.envelope(msg, topic, tag); // message stored enveloped before sending and transforming
-        var sensors = [].concat(this._sensors);
-        for(var i = 0; i < sensors.length; i++){
-            var sensor = sensors[i];
-            sensor.tell(msg, topic, tag);
+        var sensors = this.sensors;
+        var len = sensors.length;
+
+        for(var i = 0; i < len; i++){
+            var s = sensors[i];
+            s.destroy();
         }
+
+        this.sensors = null;
+        this.lastPacket = null;
+        this.dead = true;
+
     };
+
+    SubscriptionList.prototype.add = function(sensor){
+        this.sensors.push(sensor);
+    };
+
+    SubscriptionList.prototype.remove = function(sensor){
+
+        var i = this.sensors.indexOf(sensor);
+
+        if(i !== -1)
+            this.sensors.splice(i, 1);
+
+    };
+
+
 
     var Host = function(name){
         this._name = name;
@@ -1048,864 +1062,111 @@
     };
 
 
-    var Sensor = function() {
+    var Sensor = function(scope) {
 
-        this._scope = null;
-        this._multi = null; // list of sensors to process through sensor api
-        this._callback = null;
-        this._context = null;
-        this._max = null;
-        this._host = null;
-        this._bus = catbus;
-        this._batch = false;
-        this._group = false;
-        this._batchedByTag = {};
-        this._batchedAsList = [];
-        this._keep = null; // last or first or all or null (not batching)
-        this._trigger = null;
-        this._pipe = false;
-        this._change = null;
-        this._needs = []; // array of tags needed before firing
-        this._retain = false; // will retain prior tag messages
-        this._last = null;
-        this._name = null;
-        this._cmd = null;
-        this._postcard = null; // wrapped msg about to be sent...
-        this._active = true;
-        this._id = ++catbus.uid;
-        this._appear = undefined;
-        this._extract = null;
-        this._lastAppearingMsg = undefined;
-        this._dropped = false;
-        this._locked = false;
-        this._optional = false; // optional data to watch
-        this._mergeLoc = null; // an autogenerated Data to hold merged data
-        this._cluster = null;
-        this._delay = null;
-        this._cancel = null;
-
-        this._timeoutId = null;
+        this.scope = scope;
+        this.frames = [];
+        this.dead = false;
 
     };
 
-    // todo add data and sensor reset methods, use with object pooling
-
-    Sensor.prototype.throwError = function(msg){
-        throw {error:"Catbus: Sensor", msg: msg, topic: this._getTopic(), tag: this._getTag() };
-    };
 
 
-    var sensor_config = {
+    Sensor.prototype.destroy = function(){
 
-        trigger: {name: 'trigger', prop: '_trigger', setter: '_setTrigger'},
-        last: {name: 'last', prop: '_keep', setter: '_setLast'},
-        first: {name: 'first', prop: '_keep', setter: '_setFirst'},
-        all: {name: 'all', prop: '_keep', setter: '_setAll'},
-        sync: {name: 'sync', prop: '_keep', setter: '_setSync'},
-        keep: {name: 'keep', options: ['last', 'first', 'all'], prop: '_keep', default_set: 'last'},
-        retain: {name: 'retain', type: 'boolean', prop: '_retain', default_set: true},
-        need: {name: 'need', transform: '_toStringArray', valid: '_isStringArray', prop: '_needs'}, // todo, also accept [locs] to tags
-        gather: {name: 'gather', transform: '_toStringArray', valid: '_isStringArray', prop: '_gather'}, // todo, also accept [locs] to tags
-        host:  {name: 'host', transform: '_toString', type: 'string', setter: '_setHost', prop: '_host'},
-        scope:  {name: 'scope', valid: '_isScope', setter: '_setScope', prop: '_scope'},
-        batch: {name: 'batch', type: 'boolean' , prop: '_batch', default_set: true, setter: '_setBatch'},
-        change: {name: 'change', type: 'function', prop: '_change', default_set: function(msg){ return msg;}},
-        optional: {name: 'optional', type: 'boolean' , prop: '_optional', default_set: true},
-        group: {name: 'group', type: 'function', prop: '_group', functor: true, default_set: function(msg, topic, name){ return name;}},
-        pipe: {name: 'pipe', valid: '_isData', prop: '_pipe'},
-        emit: {name: 'emit', prop: '_emit', functor: true, default_set: function(msg, topic, name){ return topic;}},
-        name: {name: 'name', type: 'string' , prop: '_name'},
-        cmd: {name: 'cmd', type: 'string', prop: '_cmd'},
-        active: {name: 'active', type: 'boolean' , prop: '_active', default_set: true},
-        sleep: {name: 'sleep', no_arg: true , prop: '_active', default_set: false},
-        wake: {name: 'wake', no_arg: true , prop: '_active', default_set: true},
-        on: {name: 'on', alias: ['topic','sense'], type: 'string' , setter: '_setTopic', getter: '_getTopic'},
-        exit:  {name: 'exit', alias: ['transform'], type: 'function', functor: true, prop: '_transformMethod',
-            default_set: function(msg, topic, name){ return msg;}},
-        enter: {name: 'enter', alias: ['conform','adapt'], type: 'function', functor: true, prop:'_appear',
-            default_set: function(msg, topic, name){ return msg;}},
-        extract: {name: 'extract',  transform: '_toString', type: 'string', prop:'_extract'},
-        run: {name: 'run', type: 'function' , prop: '_callback'},
-        filter: {name: 'filter', type: 'function' , prop: '_filter'},
-        cancel: {name: 'cancel', type: 'function' , prop: '_cancel'},
-        as: {name: 'as', type: 'object' , prop: '_context'},
-        delay:  {name: 'delay', transform: '_toInt', type: 'number' , prop: '_delay'},
-        max:  {name: 'max', transform: '_toInt', type: 'number' , prop: '_max'},
-        once:  {name: 'once', no_arg: true, prop: '_max', default_set: 1},
-        tag: {name: 'tag', getter: '_getTag', prop: '_tag', functor: true}
-
-    };
-
-    // build chaining setters from config
-
-    var config_name;
-    var config;
-
-    for(config_name in sensor_config){
-        config = sensor_config[config_name];
-        var alias = config.alias;
-        if(alias){
-            for(var i = 0; i < alias.length; i++){
-                var alias_name = alias[i];
-                sensor_config[alias_name] = config;
-            }
-        }
-    }
-
-    for(config_name in sensor_config){
-
-        config = sensor_config[config_name];
-
-        if(config.no_write)
-            continue;
-
-        (function(name, props){
-
-            Sensor.prototype[name] = function(value){
-
-                if(this._multi){
-                    if(arguments.length === 0)
-                        if(props.hasOwnProperty('default_set'))
-                            return this._setMultiAttr(name, props.default_set);
-                        else
-                            return this._setMultiAttr(name);
-                    else
-                        return this._setMultiAttr(name, value);
-                }
-
-                if(arguments.length === 0)
-                    if(props.hasOwnProperty('default_set'))
-                        return this._setAttr(name, props.default_set);
-                    else
-                        return this._setAttr(name);
-                else
-                    return this._setAttr(name, value);
-            };
-
-        })(config_name, config);
-
-    }
-
-    Sensor.prototype._toInt = function(num){
-        return Math.floor(num);
-    };
-
-    Sensor.prototype._getTopic = function(){
-        return this._cluster && this._cluster._topic;
-    };
-
-    Sensor.prototype._getTag = function(){
-        if(this._tag)
-            return this._tag;
-        var loc = this._getData();
-        return loc && loc.tag();
-    };
-
-    Sensor.prototype._getData = function(){
-        return this._cluster && this._cluster._data;
-    };
-
-    Sensor.prototype._isData = function(data){
-        return data instanceof Data;
-    };
-
-    Sensor.prototype.toArray = function(){
-        if(this._multi)
-            return this._multi;
-        else
-            return [this];
-    };
-
-
-    Sensor.prototype._isScope = function(scope){ // scope can be set to null only if a sensor is already dropped
-        return (this._dropped && !scope) || scope instanceof Scope;
-    };
-
-    Sensor.prototype._toStringArray = function(stringOrStringArray){
-        var arr;
-        if(typeof stringOrStringArray === 'string')
-            arr = stringOrStringArray.split(/,|\./);
-        else
-            arr = stringOrStringArray;
-
-        for(var i = 0; i > arr.length; i++){
-            arr[i] = (arr[i]).trim();
-        }
-        return arr;
-    };
-
-    Sensor.prototype._toString = function(value){
-        if(!value) return null;
-        return value + '';
-    };
-
-    Sensor.prototype._isStringArray = function(value){
-        if(!(value instanceof Array))
-            return false;
-        for(var i = 0; i < value.length; i++){
-            var s = value[i];
-            if(typeof s !== 'string')
-                return false;
-        }
-        return true;
-    };
-
-    Sensor.prototype.attr = function(nameOrConfig, value){
-
-        if(this._multi){
-            return this._multiAttr.apply(this, arguments);
-        }
-
-        if(arguments.length === 1){
-            if(typeof nameOrConfig === 'string')
-                return this._getAttr(nameOrConfig);
-            else
-                return this._setHashAttr(nameOrConfig);
-        } else {
-            return this._setAttr(nameOrConfig, value);
-        }
-
-    };
-
-    Sensor.prototype._setMultiAttr = function(nameOrConfig, value){
-
-        var i;
-        var c = this._multi.length;
-        var s;
-
-        if(arguments.length === 1 && typeof nameOrConfig === 'object') {
-
-            for (i = 0; i < c; i++) {
-                s = this._multi[i];
-                s._setHashAttr(nameOrConfig);
-            }
+        if(this.dead)
             return this;
 
-        } else {
-            for (i = 0; i < c; i++) {
-                s = this._multi[i];
-                s._setAttr.apply(s, arguments);
-            }
-            return this;
-        }
-
-    };
+        this.dead = true;
+        this.scope = null;
 
 
+        var frames = this.frames;
+        var len = frames.length;
 
-    Sensor.prototype._multiAttr = function(nameOrConfig, value){
-
-        var i;
-        var result;
-        var c = this._multi.length;
-        var s;
-
-        if(arguments.length === 1) {
-            if (typeof nameOrConfig === 'string') {
-                result = [];
-                for (i = 0; i < c; i++) {
-                    s = this._multi[i];
-                    result.push(s._getAttr(nameOrConfig));
-                }
-                return result;
-            } else {
-                for (i = 0; i < c; i++) {
-                    s = this._multi[i];
-                    s._setHashAttr(nameOrConfig);
-                }
-                return this;
-            }
-        } else {
-            for (i = 0; i < c; i++) {
-                s = this._multi[i];
-                s._setAttr(nameOrConfig, value);
-            }
-            return this;
-        }
-
-    };
-
-
-
-    Sensor.prototype._getAttr = function(name){
-
-        var c = sensor_config[name];
-        if(!c)
-            this.throwError('Sensor getter attribute [' + name + '] not found');
-
-        return (c.getter) ? (this[c.getter]).call(this) : this[c.prop];
-
-    };
-
-    Sensor.prototype._setAttr = function(name, value){
-
-        var c = sensor_config[name];
-
-        if(!c)
-            this.throwError('Sensor attribute [' + name + '] does not exist');
-
-        if(c.method && c.no_arg && arguments.length > 1)
-            this.throwError('Sensor method [' + name + '] takes no arguments');
-
-        if(c.no_write)
-            this.throwError('Sensor attribute [' + name + '] is read-only');
-
-        if(arguments.length === 1)
-            value = c.default_set;
-
-        if(c.transform)
-            value = (this[c.transform])(value);
-
-        if(c.valid && !((this[c.valid])(value)))
-            this.throwError('Sensor set attribute [' + name + '] value invalid: ' + value);
-
-        if(typeof value !== 'function' && c.functor)
-            value = createFunctor(value);
-
-        if(c.type && value && c.type !== typeof value)
-            this.throwError('Sensor set attribute [' + name + '] type mismatch: ' + value);
-
-        if(c.options && c.options.indexOf(value) === -1)
-            this.throwError('Sensor set attribute [' + name + '] value not among options: ' + value);
-
-        if(c.setter)
-            (this[c.setter]).call(this, value);
-        else if(c.prop)
-            this[c.prop] = value;
-
-        return this;
-
-    };
-
-    Sensor.prototype._setHashAttr = function(config){
-
-        for(var name in config){
-            var value = config[name];
-            this._setAttr(name, value);
+        for(var i = 0; i < len; i++){
+            var f = frames[i];
+            f.destroy();
         }
 
         return this;
 
     };
 
-    Sensor.prototype._setScope = function(newScope){
 
-        var oldScope = this._scope;
-        if(oldScope)
-            delete oldScope._sensors[this._id];
-        this._scope = newScope;
+    var Data = function(scope, name, dimension, ephemeral) {
 
-        if(newScope)
-            newScope._sensors[this._id] = this;
+        this.dimension = dimension || 'data';
+        this.ephemeral = !!ephemeral;
+        this.name = name;
+        this.scope = scope;
 
-        return this;
-    };
+        this.subscriptionsByTopic = {}; 
 
-    Sensor.prototype._setHost = function(name) {
+        this.demandSubscriptionList('*'); // wildcard storage data for all topics
+        this.demandSubscriptionList('update'); // default for data storage
 
-        var hosts = catbus._hosts;
-
-        if(this._host && this._host._name != name){
-            delete this._host._sensorMap[this._id];
-            if(Object.keys(this._host._sensorMap).length == 0){
-                delete hosts[this._host._name];
-            }
-        }
-
-        if(!name) return this; // sensor removed from host when name is 'falsey'
-
-        this._host = hosts[name] || (hosts[name] = new Host(name));
-        this._host._sensorMap[this._id] = this;
-        return this;
-
-    };
-
-    Sensor.prototype._setTopic = function(topic){
-
-        topic = topic || 'update';
-
-        var origCluster  = this._cluster;
-        var data = origCluster._data;
-
-        if(origCluster) // changing clusters with datas, leave the current one
-            origCluster._remove(this);
-        var newCluster = this._cluster = data._demandCluster(topic);
-        newCluster._add(this);
-        return this;
-
-    };
-
-    Sensor.prototype._setTrigger = function(triggers){
-
-        // no triggers is equivalent to everything triggers
-        // todo: array of acceptable tags or data locs to tags
-        this._trigger = triggers || null;
-        return this;
-
-    };
-
-    Sensor.prototype._setSync = function(){
-
-        this._batch = false;
-        this._keep = 'none';
-        return this;
-
-    };
-
-    Sensor.prototype._setFirst = function(){
-
-        this._batch = true;
-        this._keep = 'first';
-        return this;
-
-    };
-
-    Sensor.prototype._setLast = function(){
-
-        this._batch = true;
-        this._keep = 'last';
-        return this;
-
-    };
-
-    Sensor.prototype._setAll = function(){
-
-        this._batch = true;
-        this._keep = 'all';
-        return this;
+        this.dead = false;
 
     };
 
 
-    Sensor.prototype._setBatch = function(batch){
+    Data.prototype.destroy = function(){
 
-        this._batch = batch;
-        if(batch && !this._keep)
-            this._keep = sensor_config.keep.default_set;
-        return this;
-
-    };
-
-    Sensor.prototype.peek = function() {
-        return this._cluster && this._cluster._lastEnvelope;
-    };
-
-    Sensor.prototype.look = Sensor.prototype.read = function() {
-        var packet = this.peek();
-        return (packet) ? packet.msg : undefined;
-    };
-
-    Sensor.prototype.auto = Sensor.prototype.autorun = function() {
-
-        // todo sync CYCLE start
-        var sensors = this._multi || [this];
-
-        for(var i = 0; i < sensors.length; i++){
-            var s = sensors[i];
-            var packet = s.peek();
-            if(packet) // && packet.msg != undefined)
-                s.tell(packet.msg, packet.topic, s._getTag(), true); // was packet.tag -- breaks?
-        }
-
-        // todo sync CYCLE end
-
-        return this;
-    };
-
-    Sensor.prototype._setData = function(data){
-
-        if(data === (this._cluster && this._cluster._data)) return this; // matches current data
-
-        var origCluster  = this._cluster;
-        var origTopic = origCluster && origCluster._topic || 'update';
-
-        if(origCluster) // changing clusters with datas, leave the current one
-            origCluster._remove(this);
-
-        var newCluster = this._cluster = data._demandCluster(origTopic);
-        newCluster._add(this);
-
-        return this;
-
-    };
-
-
-    // todo add 'add' sensor to multi, accept one or array or multi
-
-    Sensor.prototype.merge = Sensor.prototype.next =function(mergeTopic) {
-
-        mergeTopic = mergeTopic || 'update';
-
-        var sensors = this._multi || [this];
-
-        var mergeLoc = this._mergeLoc = this._scope.demandData('auto:' + (catbus.uid + 1));
-
-        var mergeHost = this._host && this._host._name;
-        var mergeContext = this._context;
-
-        for(var i = 0; i < sensors.length; i++){
-            var s = sensors[i];
-            mergeHost = mergeHost || (s._host && s._host._name);
-            mergeContext = mergeContext || s._context;
-            s.pipe(mergeLoc);
-        }
-        var mergedSensor = mergeLoc.on(mergeTopic).host(mergeHost).as(mergeContext);
-        return mergedSensor;
-
-    };
-
-
-    Sensor.prototype.drop = function(){
-
-        if(this._dropped)
-            return this;
-
-        this._dropped = true;
-        this._active = false;
-
-        this.host(null);
-        this.scope(null);
-
-        if(this._cluster) {
-            this._cluster._remove(this);
-            this._cluster = null;
-        }
-
-        if(this._mergeLoc)
-            this._mergeLoc.drop();
-
-
-
-        return this;
-
-    };
-
-    Sensor.prototype.tell = function(msg, topic, tag, auto) {
-
-        if(!this._active || this._dropped)
-            return this;
-
-        // todo change so gather watches but doesn't prime
-
-        if(this._gather && this._gather.length > 0)
-            msg = this._applyGathered(msg, topic, tag);
-
-        msg = (this._extract) ? msg[this._extract] : msg;
-
-        msg = (typeof this._appear === 'function') ? this._appear.call(this._context || this, msg, topic, tag) : msg;
-
-        var compare_msg = this._change && this._change.call(null, msg, topic, tag);
-        if(!auto && this._change && compare_msg === this._lastAppearingMsg)
-            return this;
-
-        this._lastAppearingMsg = compare_msg;
-
-        if(!this._callback && !this._pipe)
-            return this; // no actions to take
-
-        if(this._filter && !this._filter.call(this._context || this, msg, topic, tag))
-            return this; // message filtered out
-
-        if (this._batch || this._group) { // create lists of messages grouped by tag and list in order
-            var groupingTag = (this._group && this._group(msg, topic, tag)) || tag;
-            var list = this._batchedByTag[groupingTag] = this._batchedByTag[groupingTag] || [];
-            list.push(msg);
-            this._batchedAsList.push(msg);
-        } else {
-
-            topic = (this._emit) ? this._emit.call(this._context || this, msg, topic, tag) : topic;
-            msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
-            this._postcard = catbus.envelope(msg, topic, tag);
-
-        }
-
-        if(this._cancel && !this._cancel.call(this._context || this, msg, topic, tag)) {
-            if(this._timeoutId)
-                clearTimeout(this._timeoutId);
-            this._timeoutId = null;
-            this._primed = false;
-            return; // message canceled
-        }
-
-        if(this._primed) return;
-
-        // if all needs are not met, don't prime to send
-        if((this._batch || this._group) && this._needs) {
-            for(var i = 0; i < this._needs.length; i++){
-                var need = this._needs[i];
-                if(!this._batchedByTag.hasOwnProperty(need)) return; // a need unmet
-            }
-        }
-
-        // don't prime a command unless we get a matching command tag
-        if(!this._primed && this._cmd && this._cmd !== tag){
+        if(this.dead)
             return;
+
+        for(var topic in this.subscriptionsByTopic){
+            var subs = this.subscriptionsByTopic[topic];
+            subs.destroy();
         }
 
-        if(this._delay){
-            if(!this._timeoutId){
-                this._primed = true;
-                this._timeoutId = setTimeout(this.send.bind(this), this._delay);
-            }
-            return; // timed, primes only through delay
-        }
-
-        this._primed = true;
-
-        if (this._batch) {
-            this._bus.queue(this);
-        } else {
-            this.send();
-        }
-
-    };
-
-    Sensor.prototype._applyGathered = function(msg, topic, tag){
-
-        // todo this is stupid not performant -- fix to one time lookup
-
-        var consolidated = {};
-        var scope = this._scope;
-
-
-        var optional = this._optional; //todo add optional to sensor
-
-        for(var i = 0; i < this._gather.length; i++){
-            var name = this._gather[i];
-
-            var data = scope._findData(name, 'first', optional);
-            if(data){
-                consolidated[name] = data.read();
-            }
-        }
-
-        return consolidated;
-    };
-
-    Sensor.prototype._consolidateBatchByTag = function(){
-
-        var consolidated = {};
-
-        for(var tag in this._batchedByTag){
-
-            var msgs = this._batchedByTag[tag];
-            var keep = this._keep;
-
-            if(keep === 'first'){
-                consolidated[tag] = msgs[0];
-            } else if(keep === 'last') {
-                consolidated[tag] = msgs[msgs.length - 1];
-            } else if(keep === 'all') {
-                consolidated[tag] = msgs;
-            }
-
-        }
-
-        if(!this._retain) this._batchedByTag = {};
-
-        var msg = consolidated;
-        var topic = this._getTopic();
-        var tag = this._getTag();
-
-        topic = (this._emit) ? this._emit.call(this._context || this, msg, topic , tag) : topic;
-        msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
-
-        this._postcard = catbus.envelope(msg, topic, tag);
-
-    };
-
-    Sensor.prototype._consolidateBatchAsList = function(){
-
-        var msg;
-        var msgs = this._batchedAsList;
-        var keep = this._keep;
-
-        if(keep === 'first'){
-            msg = msgs[0];
-        } else if(keep === 'last') {
-            msg = msgs[msgs.length - 1];
-        } else if(keep === 'all') {
-            msg = msgs;
-        }
-
-        var topic = this._getTopic();
-        var tag = this._getTag();
-
-        msg = (this._transformMethod) ? this._transformMethod.call(this._context || this, msg, topic, tag) : msg;
-        topic = (this._emit) ? this._emit.call(this._context || this, msg, topic , tag) : topic;
-
-        this._postcard = catbus.envelope(msg, topic, tag);
+        this.dead = true;
 
     };
 
 
-    Sensor.prototype.send = function() {
+    Data.prototype.demandSubscriptionList = function(topic){
 
-        if(!this._active || this._dropped)
-            return this; // dropped while batching?
+        var list = this.subscriptionsByTopic[topic];
 
-        if(this._group && !this._gather) { // if gathering, hash already present
-            this._consolidateBatchByTag();
-        } else if (this._batch) {
-            this._consolidateBatchAsList();
-        }
+        if(list)
+            return list;
 
-        if(!this._retain) {
-            this._batchedByTag = {};
-            this._batchedAsList = [];
-        }
-
-        this._primed = false;
-
-        var postcard = this._postcard;
-
-
-        this._last = postcard;
-
-        if(this._pipe){ // todo sync cycle check
-            this._pipe.write(postcard.msg, postcard.topic, this._getTag(), this);
-        } else {
-            if(typeof (this._callback) !== 'function') return this;
-            this._callback.call(this._context || this, postcard.msg, postcard.topic, this._getTag(), this);
-        }
-
-        if(this._max > 0)
-            this._max--;
-        if(this._max == 0)
-            this.drop();
-
-        return this;
+        return this.subscriptionsByTopic[topic] = new SubscriptionList(topic, this);
 
     };
 
 
-    var Data = function(name, dimension, ephemeral) {
-
-        this._facade = false; //
-        this._dimension = dimension || 'data';
-        this._ephemeral = !!ephemeral;
-        this._multi = null; // list of datas to put through api
-        this._id = ++catbus.uid;
-        this._name = name || ('auto:' + this._id);
-        this._tag = name; // default
-        this._clusters = {}; // by topic
-        this._scope = null; // origin
-        this._demandCluster('*'); // wildcard storage data for all topics
-        this._demandCluster('update'); // default for data storage
-        this._dropped = false;
-
-    };
-
-
-
-
-    Data.prototype.drop = Data.prototype.destroy = function(){
-
-        if(this._dropped) return;
-
-        for(var topic in this._clusters){
-            var cluster = this._clusters[topic];
-            cluster._drop();
-        }
-
-        this._dropped = true;
-
-    };
-
-    Data.prototype.tag = function(tag){
-        if(arguments.length === 0) return this._tag;
-        this._tag = tag;
-        return this;
-    };
-
-    Data.prototype.name = function(){
-        return this._name || null;
-    };
-
-
-    Data.prototype.createSensor = Data.prototype.on = Data.prototype.sensor = function(topicOrTopics){
-
-        var topic_list;
-        var loc_list;
-        var sensor_list;
-        var data;
-        var topic;
-        var sensor;
-
-        topicOrTopics = topicOrTopics || 'update';
-        topic_list = toNameArray(topicOrTopics);
-        loc_list = this._multi || [this];
-
-        if(loc_list.length === 1 && topic_list.length === 1){
-            data = loc_list[0];
-            topic = topic_list[0];
-            sensor = data._createSensor().on(topic);
-            return sensor;
-        }
-
-        sensor = this._createSensor();
-
-        sensor_list = sensor._multi = [];
-
-        for(var i = 0; i < loc_list.length; i++){
-            data = loc_list[i];
-            for(var j = 0; j < topic_list.length; j++){
-                topic = topic_list[j];
-                sensor_list.push(data._createSensor().on(topic));
-            }
-        }
-
-        return sensor;
-
-    };
-
-    Data.prototype._createSensor = function(){
-        var sensor = new Sensor();
-        sensor.scope(this._scope);
-        sensor._setData(this);
-        return sensor;
-    };
-
-    Data.prototype._findCluster = function(topic){
-        return this._clusters[topic];
-    };
-
-    Data.prototype._demandCluster = function(topic){
-        if(typeof topic !== 'string'){
-            throw new Error("Topic is not a string");
-        }
-        return this._findCluster(topic) || (this._clusters[topic] = new Cluster(topic, this));
-    };
 
     Data.prototype.peek = function(topic){
-        if(arguments.length == 0)
-            topic = 'update';
-        var cluster = this._findCluster(topic);
-        if(!cluster)
+
+        topic = topic || 'update';
+        var subscriptionList = this.subscriptionsByTopic[topic];
+        if(!subscriptionList)
             return undefined;
-        return cluster._lastEnvelope;
+        return subscriptionList.lastPacket;
 
     };
 
     // todo split internal data write vs public external to monitor 'fire' -- also add auto/fire check
-    Data.prototype.read = Data.prototype.look = function(topic) {
+    Data.prototype.read = function(topic) {
         topic = topic || 'update';
         var packet = this.peek(topic);
         return (packet) ? packet.msg : undefined;
     };
 
 
-    Data.prototype.write = function(msg, topic, tag){
+    Data.prototype.write = function(msg, topic){
 
         topic = topic || 'update';
-        tag = tag || this.tag();
 
-        this._demandCluster(topic);
+        this.demandSubscriptionList(topic);
 
-        for(var t in this._clusters){
+        for(var t in this.subscriptionsByTopic){
             if(t === "*" || t === topic){
-                var cluster = this._clusters[t];
-                cluster._tell(msg, topic, tag, fire);
+                var subscriptionList = this.subscriptionsByTopic[t];
+                subscriptionList.tell(msg);
             }
         }
     };
@@ -1918,21 +1179,21 @@
         this.write(!this.read(topic),topic, tag, true);
     };
 
-    var selector = typeof jQuery !== 'undefined' && jQuery !== null ? jQuery : null;
-    selector = selector || (typeof Zepto !== 'undefined' && Zepto !== null ? Zepto : null);
-    if(selector)
-        selector.fn.detect = catbus.$.detect;
-
+    var plugins = typeof seele !== 'undefined' && seele;
+    if(plugins)
+        plugins.register('catbus', Catbus, true);
+    else
+        externalContext.Catbus = Catbus;
+    
     if ((typeof define !== "undefined" && define !== null) && (define.amd != null)) {
         define([], function() {
             return catbus;
         });
-        this.catbus = catbus;
+        this.Catbus = Catbus;
     } else if ((typeof module !== "undefined" && module !== null) && (module.exports != null)) {
-        module.exports = catbus;
-        catbus.catbus = catbus;
+        module.exports = Catbus;
     } else {
-        this.catbus = catbus;
+        this.Catbus = Catbus;
     }
 
 
