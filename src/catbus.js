@@ -309,8 +309,8 @@
     };
 
 
-    var BATCH_TIMER =  function(){
-        batchQueue.push(this);
+    var BATCH_TIMER =  function(stream){
+        batchQueue.push(stream || this);
     };
 
     var DEFER_TIMER = function(){
@@ -574,8 +574,8 @@
 
             var stream = streams[i];
             var destStream = new Stream();
-            stream.nextStream = destStream;
             destStreams.push(destStream);
+            stream.flowsto(destStream);
 
         }
 
@@ -608,12 +608,12 @@
         var nextFrame = this.nextFrame = new Frame(this);
         var streams = this.streams;
         var destStream = new Stream();
-        nextFrame.streams.push(destStream);
+        nextFrame.streams = [destStream];
 
         for(var i = 0; i < streams; i++){
 
             var origStream = streams[i];
-            origStream.nextStream = destStream;
+            origStream.flowsto(destStream);
 
         }
 
@@ -621,11 +621,10 @@
 
     };
 
-
-    var Stream = function(){
+    function Stream(){
 
         this.dead = false;
-        this.nextStream = null;
+        this.children = []; // streams listening or subscribed to this one
         this.lastPacket = null;
         this.name = null;
         this.topic = null;
@@ -650,6 +649,19 @@
 
         this.primed = false;
 
+    }
+
+    Stream.prototype.flowsto = function(stream){
+        this.children.push(stream);
+    };
+
+    Stream.prototype.drop = function(stream){
+
+        var i = this.children.indexOf(stream);
+
+        if(i !== -1)
+            this.children.splice(i, 1);
+
     };
 
 
@@ -658,6 +670,7 @@
         if(this.dead) // true if canceled or disposed midstream
             return this;
 
+        console.log('stream gets:', msg);
         topic = topic || 'update';
         var last = this.lastPacket;
 
@@ -673,12 +686,14 @@
     Stream.prototype.tellNext = function(msg, topic, source, thisStream){
 
         thisStream = thisStream || this; // allow callbacks with context instead of bind (massively faster)
-        var nextStream = thisStream.nextStream;
-
         thisStream.lastPacket = new Packet(msg, topic, source);
 
-        if (nextStream) {
-            nextStream.tell(msg, topic, source);
+        var children = thisStream.children;
+        var len = children.length;
+
+        for(var i = 0; i < len; i++){
+            var c = children[i];
+            c.tell(msg, topic, source);
         }
 
     };
@@ -692,10 +707,13 @@
 
     };
 
+
+
     Stream.prototype.tellDelay = function(msg, topic, source) {
 
         // passes nextStream as 'this' to avoid bind slowdown
-        setTimeout(this.tell, this.delayMethod() || 0, msg, topic, source, this.nextStream);
+
+        setTimeout(this.tellNext, this.delayMethod() || 0, msg, topic, source, this);
 
     };
 
@@ -780,11 +798,7 @@
         this.latched = this.clearMethod(); // might be noop, might hold latch
         this.primed = false;
 
-        this.lastPacket = new Packet(msg);
-
-        var nextStream = this.nextStream;
-        if(nextStream)
-            nextStream.tell(msg);
+        this.tellNext(msg);
 
     };
 
@@ -828,6 +842,28 @@
 
     }
 
+    // create a sensor watching one or more data elements
+    Scope.prototype.watch = function(name, topic, dimension){
+
+        var topic = topic || 'update';
+        var nameList = (typeof name === 'string') ? [name] : name;
+        var len = nameList.length;
+
+
+        var frame = new Frame();
+        var streams = frame.streams;
+
+        for(var i = 0; i < len; i++){
+            var d = this.findData(name, dimension);
+            var s = new Stream();
+            d.flowsto(s, topic);
+            streams.push(s);
+        }
+
+        var sensor = new Sensor(this);
+        sensor.frames = [new Frame()]
+
+    };
 
     Scope.prototype.destroy = function(){
 
@@ -988,11 +1024,11 @@
     };
 
 
-    // subscriptions for a topic on a data element
-    var SubscriptionList = function(topic, data) {
+    // holds subscriptions for a topic on a data element
+    var DataFlow = function(topic, data) {
 
         this.topic = topic;
-        this.sensors = [];
+        this.streams = [];
         this.lastPacket = null;
         this.data = data;
         this.ephemeral = data.ephemeral;
@@ -1002,7 +1038,7 @@
     };
 
 
-    SubscriptionList.prototype.tell = function(msg){
+    DataFlow.prototype.tell = function(msg){
 
         if(this.dead) return;
 
@@ -1013,44 +1049,44 @@
         if(!this.ephemeral)
             this.lastPacket = new Packet(msg, topic, source);
 
-        var sensors = [].concat(this.sensors); // call original sensors in case subscriptions change mid loop
-        var len = sensors.length;
+        var streams = [].concat(this.streams); // call original sensors in case subscriptions change mid loop
+        var len = streams.length;
 
         for(var i = 0; i < len; i++){
-            var s = sensors[i];
+            var s = streams[i];
             s.tell(msg, topic, source, last);
         }
 
     };
 
-    SubscriptionList.prototype.destroy = function(){
+    DataFlow.prototype.destroy = function(){
 
         if(this.dead) return;
 
-        var sensors = this.sensors;
-        var len = sensors.length;
+        var streams = this.streams;
+        var len = streams.length;
 
         for(var i = 0; i < len; i++){
-            var s = sensors[i];
+            var s = streams[i];
             s.destroy();
         }
 
-        this.sensors = null;
+        this.streams = null;
         this.lastPacket = null;
         this.dead = true;
 
     };
 
-    SubscriptionList.prototype.add = function(sensor){
-        this.sensors.push(sensor);
+    DataFlow.prototype.flowsto = function(stream){
+        this.streams.push(stream);
     };
 
-    SubscriptionList.prototype.remove = function(sensor){
+    DataFlow.prototype.drop = function(stream){
 
-        var i = this.sensors.indexOf(sensor);
+        var i = this.streams.indexOf(stream);
 
         if(i !== -1)
-            this.sensors.splice(i, 1);
+            this.streams.splice(i, 1);
 
     };
 
@@ -1080,7 +1116,6 @@
         this.dead = true;
         this.scope = null;
 
-
         var frames = this.frames;
         var len = frames.length;
 
@@ -1103,8 +1138,8 @@
 
         this.subscriptionsByTopic = {}; 
 
-        this.demandSubscriptionList('*'); // wildcard storage data for all topics
-        this.demandSubscriptionList('update'); // default for data storage
+        this.demandDataFlow('*'); // wildcard storage data for all topics
+        this.demandDataFlow('update'); // default for data storage
 
         this.dead = false;
 
@@ -1126,26 +1161,32 @@
     };
 
 
-    Data.prototype.demandSubscriptionList = function(topic){
+    Data.prototype.demandDataFlow = function(topic){
 
         var list = this.subscriptionsByTopic[topic];
 
         if(list)
             return list;
 
-        return this.subscriptionsByTopic[topic] = new SubscriptionList(topic, this);
+        return this.subscriptionsByTopic[topic] = new DataFlow(topic, this);
 
     };
 
+    Data.prototype.flowsto = function(stream, topic){
+
+        var pub = this.demandDataFlow(topic);
+        pub.flowsto(stream)
+
+    };
 
 
     Data.prototype.peek = function(topic){
 
         topic = topic || 'update';
-        var subscriptionList = this.subscriptionsByTopic[topic];
-        if(!subscriptionList)
+        var dataFlow = this.subscriptionsByTopic[topic];
+        if(!dataFlow)
             return undefined;
-        return subscriptionList.lastPacket;
+        return dataFlow.lastPacket;
 
     };
 
@@ -1161,22 +1202,22 @@
 
         topic = topic || 'update';
 
-        this.demandSubscriptionList(topic);
+        this.demandDataFlow(topic);
 
         for(var t in this.subscriptionsByTopic){
             if(t === "*" || t === topic){
-                var subscriptionList = this.subscriptionsByTopic[t];
-                subscriptionList.tell(msg);
+                var dataFlow = this.subscriptionsByTopic[t];
+                dataFlow.tell(msg);
             }
         }
     };
 
-    Data.prototype.refresh = function(topic, tag){
-        this.write(this.read(topic),topic, tag, true);
+    Data.prototype.refresh = function(topic){
+        this.write(this.read(topic),topic);
     };
 
-    Data.prototype.toggle = function(topic, tag){
-        this.write(!this.read(topic),topic, tag, true);
+    Data.prototype.toggle = function(topic){
+        this.write(!this.read(topic),topic);
     };
 
     var plugins = typeof seele !== 'undefined' && seele;

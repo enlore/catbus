@@ -105,19 +105,6 @@ describe('Catbus', function(){
     describe('Datas', function(){
 
 
-        it('makes datas', function(){
-            assert.equal('object', typeof tree);
-            assert.equal(3, lands._multi.length);
-        });
-
-        it('with default tags', function(){
-            assert.equal('tree', tree.tag());
-        });
-
-        it('and specific tags', function(){
-            assert.equal('Ponyo', boat.tag());
-        });
-
         it('can hold data', function(){
             tree.write('Totoro');
             assert.equal('Totoro', tree.read());
@@ -151,16 +138,20 @@ describe('Catbus', function(){
 
 
         it('makes sensors with update topic', function(){
-            var fish = boat.createSensor();
-            fish.run(_logger);
-            boat.write('scales');
-            assert.equal('update', fish.attr('on'));
+            var fish = root.watch('castle');
+            castle.write('cow');
+            console.log(fish);
+            //fish.run(_logger);
+            //boat.write('scales');
+            //assert.equal('update', fish.attr('on'));
         });
 
         it('and other topics', function(){
-            var fish = boat.on('waves');
-            assert.equal('waves', fish.attr('on'));
-            assert.equal('waves', fish.attr('topic'));
+            var fish = root.watch('castle', 'meow');
+            castle.write('cow', 'bunny');
+            castle.write('dog', 'meow');
+            assert.equal('cow', castle.read('bunny'));
+            assert.equal('dog', castle.read('meow'));
         });
 
         it('makes multi-sensors with topics', function(){
