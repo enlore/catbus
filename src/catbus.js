@@ -1,7 +1,7 @@
 /**
  * catbus.js (v4.0.0) --
  *
- * Copyright (c) 2016 Scott Southworth, Landon Barnickle, Nick Lorenson & Contributors
+ * Copyright (c) 2016 Scott Southworth
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at:
@@ -12,7 +12,7 @@
  * ANY KIND, either express or implied. See the License for the specific language
  * governing permissions and limitations under the License.
  *
- * @authors Scott Southworth @darkmarmot, Landon Barnickle @landonbar, Nick Lorenson @enlore
+ * @authors Scott Southworth @darkmarmot
  *
  */
 
@@ -323,19 +323,6 @@
 
     };
 
-    Frame.prototype.addStreams = function(streams) {
-        var nextFrame = this.addFrame();
-        nextFrame.streams = nextFrame.streams.concat(streams);
-        return nextFrame;
-    };
-
-    Frame.prototype.addStream = function(stream) {
-        var nextFrame = this.addFrame();
-        nextFrame.streams.push(stream);
-        return nextFrame;
-    };
-
-
 
     function createEventStream(target, eventName, useCapture){
 
@@ -382,62 +369,11 @@
 
     // like addFrame but doesn't connect via frames to the prior frame, acting as the init frame of a new bus
 
-    Frame.prototype.forkFrame = function(){
 
-        var frame = new Frame();
-        var streams = this.streams;
-        var len = streams.length;
-        var destStreams = frame.streams;
 
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            var destStream = new Stream();
-            destStreams.push(destStream);
-            stream.flowsTo(destStream);
-
-        }
-
-        return frame;
-
-    };
-
-    Frame.prototype.fromStream = function(stream){
-        this.streams.push(stream);
-        return this;
-    };
-
-    Frame.prototype.fromStreams = function(streams){
-        this.streams = this.streams.concat(streams);
-        return this;
-    };
 
 
 // create a new frame with matching empty streams fed by the current frame
-
-
-    Frame.prototype.addFrame = function(){
-
-        var nextFrame = this.nextFrame = new Frame(this);
-        nextFrame.bus = this.bus;
-        this.bus.frames.push(nextFrame);
-
-        var streams = this.streams;
-        var len = streams.length;
-        var destStreams = nextFrame.streams;
-
-        for(var i = 0; i < len; i++){
-
-            var stream = streams[i];
-            var destStream = new Stream();
-            destStreams.push(destStream);
-            stream.flowsTo(destStream);
-
-        }
-
-        return nextFrame;
-
-    };
 
     Frame.prototype.modifyFrame = function(prop, val){
 
@@ -457,25 +393,7 @@
     };
 
 
-    // create a new frame with one stream fed by all streams of the current frame
-
-    Frame.prototype.mergeFrame = function(){
-
-        var nextFrame = this.nextFrame = new Frame(this);
-        var streams = this.streams;
-        var destStream = new Stream();
-        nextFrame.streams = [destStream];
-
-        for(var i = 0; i < streams; i++){
-
-            var origStream = streams[i];
-            origStream.flowsto(destStream);
-
-        }
-
-        return nextFrame;
-
-    };
+    
 
     var NOOP = function(){};
 
@@ -743,6 +661,11 @@
 
     };
 
+    //Bus.prototype.currentFrame = function(){
+    //    var frames = this.frames;
+    //    var len = frames.length;
+    //    return len ? frames[len-1] : null;
+    //};
 
     Bus.prototype.addFrame = function(){
 
@@ -754,14 +677,54 @@
         nextFrame.bus = this;
         frames.push(nextFrame);
 
-        this.wireFrames(currentFrame, nextFrame);
+        this._wireFrames(currentFrame, nextFrame);
 
         return nextFrame;
     };
 
+    // create a new frame with one stream fed by all streams of the current frame
+
+    Bus.prototype.merge = function(){
+
+        var mergeFrame = new Frame();
+        var streams = this.streams;
+        
+        var mergeStream = new Stream();
+        mergeFrame.streams = [mergeStream];
+
+        for(var i = 0; i < streams; i++){
+
+            var s = streams[i];
+            s.flowsTo(mergeStream);
+
+        }
+
+        return this;
+
+    };
+    
+
+    Bus.prototype.fork = function(){
+
+        var frames = this.frames;
+        var len = frames.length;
+        var currentFrame = frames[len-1];
+
+        var forkFrame = new Frame();
+        forkFrame.index = 0;
+        var forkBus = forkFrame.bus = new Bus();
+        forkBus.frames.push(forkFrame);
+
+        this._wireFrames(currentFrame, forkFrame);
+
+        return forkBus;
+    };
+
+
+
     // send messages from streams in one frame to new empty streams in another frame
 
-    Bus.prototype.wireFrames = function(frame1, frame2){
+    Bus.prototype._wireFrames = function(frame1, frame2){
 
         var streams1 = frame1.streams;
         var len = streams1.length;
@@ -777,6 +740,8 @@
         }
 
     };
+
+    
 
     Bus.prototype.all = function(){
         this.addFrame().all();
