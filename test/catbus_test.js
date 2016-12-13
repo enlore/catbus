@@ -242,6 +242,46 @@ describe('Catbus', function(){
 
             });
 
+            it('can delay messages', function (done) {
+
+                reset();
+                this.timeout(1000);
+
+                var b = Catbus.fromEvent(dice, 'roll');
+                b.transform(function(msg){ return msg * 2});
+                b.delay(100);
+                b.run(log);
+
+                dice.emit('roll', 5);
+                dice.emit('drop', 1);
+                dice.emit('roll', 4);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 7);
+
+                assert.equal(msgLog.length, 0);
+
+                function assertLater(){
+
+                    assert.equal(msgLog[0], 10);
+                    assert.equal(msgLog[5], 14);
+
+                }
+
+                setTimeout(function(){
+                    b.destroy();
+                    assertLater();
+                    done();
+                }, 200);
+
+
+
+
+
+
+            });
+
 
         });
 

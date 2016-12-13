@@ -208,7 +208,7 @@
         if(arguments.length === 0)
             throw new Error('Sensor.frame.delay requires one argument.');
 
-        func = createFunctor(funcOrNum);
+        var func = createFunctor(funcOrNum);
 
         this.modifyFrame('delayMethod', func);
         this.modifyFrame('processName', 'doDelay');
@@ -473,11 +473,9 @@
 
     Stream.prototype.flowForward = function(msg, source, thisStream){
 
-        if(this.children.length === 0)
-            return;
-
         thisStream = thisStream || this; // allow callbacks with context instead of bind (massively faster)
         thisStream.lastPacket = new Packet(msg, source);
+
 
         var children = thisStream.children;
         var len = children.length;
@@ -735,6 +733,10 @@
 
         }
 
+    };
+
+    Bus.prototype.delay = function(num){
+        this.addFrame().delay(num);
     };
 
 
