@@ -661,11 +661,6 @@
 
     };
 
-    //Bus.prototype.currentFrame = function(){
-    //    var frames = this.frames;
-    //    var len = frames.length;
-    //    return len ? frames[len-1] : null;
-    //};
 
     Bus.prototype.addFrame = function(){
 
@@ -686,8 +681,9 @@
 
     Bus.prototype.merge = function(){
 
+        var sourceFrame = this.frames[this.frames.length-1];
         var mergeFrame = new Frame();
-        var streams = this.streams;
+        var streams = sourceFrame.streams;
         
         var mergeStream = new Stream();
         mergeFrame.streams = [mergeStream];
@@ -741,7 +737,6 @@
 
     };
 
-    
 
     Bus.prototype.all = function(){
         this.addFrame().all();
