@@ -161,7 +161,7 @@ describe('Catbus', function(){
 
             });
 
-            it('can keep multiple messages', function () {
+            it('can keep multiple messages using last', function () {
 
                 reset();
 
@@ -183,10 +183,62 @@ describe('Catbus', function(){
                 var lastMsg = msgLog[msgLog.length-1];
 
                 assert.equal(lastMsg.length, 3);
-                //assert.equal(msgLog[0], 10);
-                //assert.equal(msgLog[1], 6);
-                //assert.equal(msgLog[2], 10);
-                //assert.equal(sourceLog[1], 'roll');
+                assert.equal(lastMsg[2], 14);
+
+
+            });
+
+            it('can keep multiple messages using first', function () {
+
+                reset();
+
+                var b = Catbus.fromEvent(dice, 'roll');
+                b.transform(function(msg){ return msg * 2});
+                b.first(2);
+                b.run(log);
+
+                dice.emit('roll', 5);
+                dice.emit('drop', 1);
+                dice.emit('roll', 4);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 7);
+
+                b.destroy();
+
+                var lastMsg = msgLog[msgLog.length-1];
+
+                assert.equal(lastMsg.length, 2);
+                assert.equal(lastMsg[1], 8);
+
+
+            });
+
+            it('can keep all messages using all', function () {
+
+                reset();
+
+                var b = Catbus.fromEvent(dice, 'roll');
+                b.transform(function(msg){ return msg * 2});
+                b.all();
+                b.run(log);
+
+                dice.emit('roll', 5);
+                dice.emit('drop', 1);
+                dice.emit('roll', 4);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 7);
+
+                b.destroy();
+
+                var lastMsg = msgLog[msgLog.length-1];
+
+                assert.equal(lastMsg.length, 6);
+                assert.equal(lastMsg[5], 14);
+
 
             });
 

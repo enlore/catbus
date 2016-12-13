@@ -159,6 +159,8 @@
     Frame.prototype.hold = function(){
 
         this._holding = true;
+        this.modifyFrame('processName', 'doHold');
+
         return this;
 
     };
@@ -247,6 +249,8 @@
 
     Frame.prototype.group = function(func){
 
+        this._holding = true;
+
         func = arguments.length === 1 ? createFunctor(func) : TO_SOURCE_FUNC;
 
         this.modifyFrame('processName', 'doGroup');
@@ -264,6 +268,8 @@
 
         this.modifyFrame('keepMethod', KEEP_LAST);
         this.modifyFrame('keepCount', n);
+        if(!this._holding)
+            this.modifyFrame('processName', 'doKeep');
 
         return this;
 
@@ -274,6 +280,8 @@
         n = Number(n) || 0;
         this.modifyFrame('keepMethod', KEEP_FIRST);
         this.modifyFrame('keepCount', n);
+        if(!this._holding)
+            this.modifyFrame('processName', 'doKeep');
 
         return this;
 
@@ -283,6 +291,9 @@
     Frame.prototype.all = function(){
 
         this.modifyFrame('keepMethod', KEEP_ALL);
+        this.modifyFrame('keepCount', -1);
+        if(!this._holding)
+            this.modifyFrame('processName', 'doKeep');
 
         return this;
 
@@ -479,7 +490,7 @@
         this.messages = []; // [] with hold
         this.messagesByKey = null; // {} with group
 
-        this.processName = 'doKeep'; // default to pass things along last thing unchanged
+        this.processName = 'doPass'; // default to pass things along last thing unchanged
         this.keepMethod = KEEP_LAST; // default if holding or grouping
         this.keepCount = 0; // non-zero creates an array
 
@@ -765,6 +776,14 @@
 
         }
 
+    };
+
+    Bus.prototype.all = function(){
+        this.addFrame().all();
+    };
+
+    Bus.prototype.first = function(n){
+        this.addFrame().first(n);
     };
 
     Bus.prototype.last = function(n){
