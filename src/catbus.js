@@ -202,8 +202,8 @@
 
     Frame.prototype.delay = function(funcOrNum){
 
-        if(this._holding)
-            throw new Error('Sensor.frame.delay cannot be invoked while holding.');
+        //if(this._holding)
+        //    throw new Error('Sensor.frame.delay cannot be invoked while holding.');
 
         if(arguments.length === 0)
             throw new Error('Sensor.frame.delay requires one argument.');
@@ -211,6 +211,7 @@
         var func = createFunctor(funcOrNum);
 
         this.modifyFrame('delayMethod', func);
+
         this.modifyFrame('processName', 'doDelay');
         return this;
 
@@ -301,13 +302,8 @@
 
     Frame.prototype.batch = function(){
 
-        var frame = this.timerSpecified || this.nothingSpecified ? this.addFrame() : this;
-        frame.timerSpecified = true;
-        frame.nothingSpecified = false;
-
-        frame.modifyFrame(TIMER_METHOD, BATCH_TIMER);
-
-        return frame;
+        this.modifyFrame(TIMER_METHOD, BATCH_TIMER);
+        return this;
 
     };
 
@@ -420,8 +416,8 @@
         this.nameMethod = null;
         this.delayMethod = null;
 
-        this.readyMethod = null;
-        this.clearMethod = null; // return true/false for latched
+        this.readyMethod = TRUE_FUNC;
+        this.clearMethod = TRUE_FUNC; // return true/false for latched
         this.latched = false; // from this.clearMethod()
 
         this.primed = false;
@@ -518,7 +514,6 @@
     };
 
 
-
     Stream.prototype.doDelay = function(msg, source) {
 
         // passes nextStream as 'this' to avoid bind slowdown
@@ -576,7 +571,7 @@
         var groupName = this.groupMethod(msg, source, last);
 
         var messages = this.messagesByKey[groupName] = this.messagesByKey[groupName] || [];
-        messages.push(msg);
+        this.keepMethod(messages, msg, this.keepCount);
 
         if(!this.primed && (this.latched || this.readyMethod(this.messagesByKey, last))) {
             if(this.timerMethod) {
@@ -601,6 +596,16 @@
                 this.fireContent();
             }
         }
+
+    };
+
+    Stream.prototype.releaseHold = function() {
+
+        var msg = this.resolveKeep();
+        this.latched = this.clearMethod(); // might be noop, might hold latch
+        this.primed = false;
+
+        this.flowForward(msg);
 
     };
 
@@ -659,6 +664,11 @@
 
     };
 
+    Bus.prototype.currentFrame = function(){
+        var frames = this.frames;
+        var len = frames.length;
+        return frames[len-1];
+    };
 
     Bus.prototype.addFrame = function(){
 
@@ -735,37 +745,66 @@
 
     };
 
+    Bus.prototype.defer = function(){
+        var currentFrame = this.currentFrame();
+        this._holding ? currentFrame.delay(0) : this.addFrame().delay(0);
+        return this;
+    };
+
+    Bus.prototype.batch = function(){
+        var currentFrame = this.currentFrame();
+        this._holding ? currentFrame.batch() : this.addFrame().batch();
+        return this;
+    };
+
+
+    Bus.prototype.hold = function(){
+        this._holding = true;
+        this.addFrame().hold();
+        return this;
+    };
+
     Bus.prototype.delay = function(num){
         this.addFrame().delay(num);
+        return this;
     };
 
 
     Bus.prototype.all = function(){
         this.addFrame().all();
+        return this;
     };
 
     Bus.prototype.first = function(n){
         this.addFrame().first(n);
+        return this;
     };
 
     Bus.prototype.last = function(n){
-        this.addFrame().last(n);
+        var currentFrame = this.currentFrame();
+        this._holding ? currentFrame.last(n) : this.addFrame().last(n);
+        //this.addFrame().last(n);
+        return this;
     };
 
     Bus.prototype.run = function(func){
         this.addFrame().run(func);
+        return this;
     };
 
     Bus.prototype.transform = function(func){
         this.addFrame().transform(func);
+        return this;
     };
 
     Bus.prototype.filter = function(func){
         this.addFrame().filter(func);
+        return this;
     };
 
     Bus.prototype.skipDupes = function(func){
         this.addFrame().filter(SKIP_DUPES_FILTER);
+        return this;
     };
 
 
