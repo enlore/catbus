@@ -31,8 +31,6 @@
     Catbus.primed = false;
 
 
-
-
     var TIMER_METHOD = 'timerMethod';
 
     var batchQueue = []; // for all batching
@@ -134,11 +132,18 @@
 
 // todo group first, then keep, then batch // if schedule then will add frame
 
-    var Frame = function(){
+    var Frame = function(bus, streams){
 
-        this.bus = null;
-        this.streams = [];
-        this.index = 0;
+        this.bus = bus;
+        this.index = bus.frames.length;
+        streams = this.streams = streams || [];
+
+        var len = streams.length;
+        for(var i = 0; i < len; i++){
+            var s = streams[i].frame = this;
+            s.index = i;
+        }
+
         this._holding = false; //begins group, keep, schedule frame
 
     };
@@ -202,17 +207,14 @@
 
     Frame.prototype.delay = function(funcOrNum){
 
-        //if(this._holding)
-        //    throw new Error('Sensor.frame.delay cannot be invoked while holding.');
-
         if(arguments.length === 0)
             throw new Error('Sensor.frame.delay requires one argument.');
 
         var func = createFunctor(funcOrNum);
 
         this.modifyFrame('delayMethod', func);
-
         this.modifyFrame('processName', 'doDelay');
+
         return this;
 
     };
@@ -256,7 +258,6 @@
 
         this.modifyFrame('processName', 'doGroup');
         this.modifyFrame('groupMethod', func);
-        this.modifyFrame('messagesByKey', {});
 
         return this;
 
@@ -393,8 +394,9 @@
 
     var NOOP = function(){};
 
-    function Stream(){
+    function Stream(frame){
 
+        this.frame = frame || null;
         this.dead = false;
         this.children = []; // streams listening or subscribed to this one
         this.lastPacket = null;
@@ -402,7 +404,7 @@
         this.cleanupMethod = NOOP; // to cleanup subscriptions
 
         this.messages = []; // [] with hold
-        this.messagesByKey = null; // {} with group
+        this.messagesByKey = {}; // {} with group
 
         this.processName = 'doPass'; // default to pass things along last thing unchanged
         this.keepMethod = KEEP_LAST; // default if holding or grouping
@@ -499,8 +501,8 @@
 
     // synchronous keep
 
-    Stream.prototype.resolveKeep = function(){
-        return this.keepCount === 0 ? this.messages[0] : this.messages;
+    Stream.prototype.resolveKeep = function(messages){
+        return this.keepCount === 0 ? messages[0] : messages;
     };
 
 
@@ -508,7 +510,7 @@
     Stream.prototype.doKeep = function(msg, source) {
 
         this.keepMethod(this.messages, msg, this.keepCount);
-        msg = this.resolveKeep();
+        msg = this.resolveKeep(this.messages);
         this.flowForward(msg, source);
 
     };
@@ -570,9 +572,10 @@
 
         var groupName = this.groupMethod(msg, source, last);
 
-        var messages = this.messagesByKey[groupName] = this.messagesByKey[groupName] || [];
-        this.keepMethod(messages, msg, this.keepCount);
+        var messages = this.messagesByKey[groupName] || [];
+        this.messagesByKey[groupName]  = this.keepMethod(messages, msg, this.keepCount);
 
+        console.log('stream: ' + this.frame.streams.indexOf(this) + ':', msg, source, this.messagesByKey)
         if(!this.primed && (this.latched || this.readyMethod(this.messagesByKey, last))) {
             if(this.timerMethod) {
                 this.primed = true;
@@ -601,7 +604,7 @@
 
     Stream.prototype.releaseHold = function() {
 
-        var msg = this.resolveKeep();
+        var msg = this.resolveKeep(this.messages);
         this.latched = this.clearMethod(); // might be noop, might hold latch
         this.primed = false;
 
@@ -611,7 +614,7 @@
 
     Stream.prototype.fireContent = function() {
 
-        var msg = this.groupMethod ? this.resolveKeepByGroup() : this.resolveKeep();
+        var msg = this.groupMethod ? this.resolveKeepByGroup() : this.resolveKeep(this.messages);
 
         this.latched = this.clearMethod(); // might be noop, might hold latch
         this.primed = false;
@@ -648,58 +651,48 @@
 
     Catbus.fromStream = function(stream){
 
-        var bus = new Bus();
-        var frame = new Frame();
-        frame.streams.push(stream);
-        frame.bus = bus;
-        bus.frames.push(frame);
-        return bus;
+        return new Bus([stream]);
 
     };
 
-    var Bus = function() {
+    var Bus = function(sourceStreams) {
 
         this.frames = [];
+        var f = this._currentFrame = new Frame(this, sourceStreams);
+        this.frames.push(f);
         this.dead = false;
 
     };
 
-    Bus.prototype.currentFrame = function(){
-        var frames = this.frames;
-        var len = frames.length;
-        return frames[len-1];
-    };
 
     Bus.prototype.addFrame = function(){
 
-        var frames = this.frames;
-        var len = frames.length;
-        var currentFrame = frames[len-1];
-        var nextFrame = new Frame();
-        nextFrame.index = len;
-        nextFrame.bus = this;
-        frames.push(nextFrame);
+        var lastFrame = this._currentFrame;
+        var nextFrame = this._currentFrame = new Frame(this);
+        this.frames.push(nextFrame);
 
-        this._wireFrames(currentFrame, nextFrame);
+        this._wireFrames(lastFrame, nextFrame);
 
         return nextFrame;
     };
 
     // create a new frame with one stream fed by all streams of the current frame
 
-    Bus.prototype.merge = function(){
+    Bus.prototype.mergeFrame = function(){
 
-        var sourceFrame = this.frames[this.frames.length-1];
-        var mergeFrame = new Frame();
-        var streams = sourceFrame.streams;
-        
-        var mergeStream = new Stream();
-        mergeFrame.streams = [mergeStream];
+        var mergedStream = new Stream();
 
-        for(var i = 0; i < streams; i++){
+        var lastFrame = this._currentFrame;
+        var nextFrame = this._currentFrame = new Frame(this, [mergedStream]);
+        this.frames.push(nextFrame);
+
+        var streams = lastFrame.streams;
+        var len = streams.length;
+
+        for(var i = 0; i < len; i++){
 
             var s = streams[i];
-            s.flowsTo(mergeStream);
+            s.flowsTo(mergedStream);
 
         }
 
@@ -710,24 +703,16 @@
 
     Bus.prototype.fork = function(){
 
-        var frames = this.frames;
-        var len = frames.length;
-        var currentFrame = frames[len-1];
+        var fork = new Bus();
+        this._wireFrames(this._currentFrame, fork._currentFrame);
 
-        var forkFrame = new Frame();
-        forkFrame.index = 0;
-        var forkBus = forkFrame.bus = new Bus();
-        forkBus.frames.push(forkFrame);
-
-        this._wireFrames(currentFrame, forkFrame);
-
-        return forkBus;
+        return fork;
     };
 
 
 
     // send messages from streams in one frame to new empty streams in another frame
-
+    // injects new streams to frame 2
     Bus.prototype._wireFrames = function(frame1, frame2){
 
         var streams1 = frame1.streams;
@@ -737,7 +722,7 @@
         for(var i = 0; i < len; i++){
 
             var s1 = streams1[i];
-            var s2 = new Stream();
+            var s2 = new Stream(frame2);
             streams2.push(s2);
             s1.flowsTo(s2);
 
@@ -745,18 +730,31 @@
 
     };
 
+    Bus.prototype.add = function(bus){
+
+        var frame = this.addFrame(); // wire from current bus
+        bus._wireFrames(bus._currentFrame, frame); // wire from outside bus
+        return this;
+
+    };
+
     Bus.prototype.defer = function(){
-        var currentFrame = this.currentFrame();
+        var currentFrame = this._currentFrame;
         this._holding ? currentFrame.delay(0) : this.addFrame().delay(0);
         return this;
     };
 
     Bus.prototype.batch = function(){
-        var currentFrame = this.currentFrame();
+        var currentFrame = this._currentFrame;
         this._holding ? currentFrame.batch() : this.addFrame().batch();
         return this;
     };
 
+    Bus.prototype.group = function(){
+        this._holding = true;
+        this.addFrame().group();
+        return this;
+    };
 
     Bus.prototype.hold = function(){
         this._holding = true;
@@ -781,14 +779,18 @@
     };
 
     Bus.prototype.last = function(n){
-        var currentFrame = this.currentFrame();
+        var currentFrame = this._currentFrame;
         this._holding ? currentFrame.last(n) : this.addFrame().last(n);
-        //this.addFrame().last(n);
         return this;
     };
 
     Bus.prototype.run = function(func){
         this.addFrame().run(func);
+        return this;
+    };
+
+    Bus.prototype.merge = function(){
+        this.mergeFrame();
         return this;
     };
 
@@ -847,8 +849,6 @@
     } else {
         this.Catbus = Catbus;
     }
-
-
 
 
 }).call(this);

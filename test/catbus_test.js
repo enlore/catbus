@@ -14,6 +14,7 @@ var msgLog, sourceLog, packetLog;
 
 var log = function(msg, source, packet){
 
+    console.log('::', msg, source, '\n');
     msgLog.push(msg);
     sourceLog.push(source);
     packetLog.push(packet);
@@ -242,6 +243,7 @@ describe('Catbus', function(){
 
             });
 
+
             it('can delay messages', function (done) {
 
                 reset();
@@ -304,7 +306,7 @@ describe('Catbus', function(){
                 function assertLater(){
 
                     Catbus.flush();
-                    console.log(msgLog);
+                    console.log('BATCH ASSERT');
                     assert.equal(msgLog.length, 1);
                     assert.equal(msgLog[0][0], 6);
                     assert.equal(msgLog[0][1], 14);
@@ -312,19 +314,108 @@ describe('Catbus', function(){
                 }
 
                 setTimeout(function(){
-                    //Catbus.flush();
-                    b.destroy();
                     assertLater();
+                    b.destroy();
                     done();
                 }, 200);
 
             });
 
+
+            it('can add buses together', function () {
+
+                reset();
+
+                var b1 = Catbus.fromEvent(dice, 'roll');
+                b1.transform(function(msg){ return msg * 2});
+
+                var b2 = Catbus.fromEvent(dice, 'drop');
+                b2.transform(function(msg){ return -msg});
+
+                b1.add(b2);
+                b1.run(log);
+
+                dice.emit('roll', 5);
+                dice.emit('drop', 1);
+                dice.emit('roll', 4);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 7);
+
+                b1.destroy();
+                b2.destroy();
+
+                assert.equal(msgLog.length, 7);
+                assert.equal(msgLog[1], -1);
+                assert.equal(msgLog[6], 14);
+
+
+            });
+
+            it('can group by source', function (done) {
+
+                reset();
+
+                console.log('groupies\n');
+                this.timeout(1000000);
+
+
+                var b1 = Catbus.fromEvent(dice, 'roll');
+                b1.transform(function(msg){ return msg * 2});
+
+                var b2 = Catbus.fromEvent(dice, 'drop');
+                b2.transform(function(msg){ return -msg});
+
+                b1.add(b2);
+                b1.merge();
+                b1.group();
+                b1.last(3);
+                b1.batch();
+                b1.run(log);
+
+                console.log('b2 DESTROY');
+
+                //b2.destroy();
+                dice.emit('roll', 5);
+                dice.emit('drop', 1);
+                dice.emit('roll', 4);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 3);
+                dice.emit('roll', 7);
+
+
+                function assertLater(){
+
+                    Catbus.flush();
+                    assert.equal(msgLog.length, 1);
+                    assert.equal(msgLog[0].roll[2], 14);
+                    assert.equal(msgLog[0].drop[0], -1);
+
+                }
+
+                setTimeout(function(){
+
+                    assertLater();
+                    b1.destroy();
+                    b2.destroy();
+                    done();
+
+                }, 200);
+
+
+
+            });
+
         });
+
+
+
 
         // todo activate/deactivate bus
 
-        // todo groups, ready, clear, latch
+        // todo ready, clear, latch
 
 
 
